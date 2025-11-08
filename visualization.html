@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BRAMPS - Real-time Magnetic Fingerprint Visualization</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a1a;
+            color: #ffffff;
+            overflow: hidden;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            height: 100vh;
+        }
+
+        .sidebar {
+            background: #2d2d2d;
+            padding: 20px;
+            border-right: 1px solid #444;
+            overflow-y: auto;
+        }
+
+        .main-view {
+            position: relative;
+            background: #000;
+        }
+
+        .header {
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            font-size: 20px;
+            color: #4a9eff;
+            margin-bottom: 5px;
+        }
+
+        .header p {
+            font-size: 14px;
+            color: #888;
+        }
+
+        .control-section {
+            margin-bottom: 25px;
+            padding: 15px;
+            background: #333;
+            border-radius: 8px;
+        }
+
+        .control-section h3 {
+            font-size: 16px;
+            margin-bottom: 10px;
+            color: #4a9eff;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 12px;
+            color: #ccc;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 8px;
+            background: #444;
+            border: 1px solid #555;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 14px;
+        }
+
+        .button {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-bottom: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .button.primary {
+            background: #4a9eff;
+            color: white;
+        }
+
+        .button.success {
+            background: #28a745;
+            color: white;
+        }
+
+        .button.danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .button:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-dot.connected { background: #28a745; }
+        .status-dot.disconnected { background: #dc3545; }
+        .status-dot.mapping { background: #ffc107; }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .stat-item {
+            background: #444;
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #4a9eff;
+        }
+
+        .stat-label {
+            font-size: 10px;
+            color: #888;
+            margin-top: 2px;
+        }
+
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        #mapCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            background: #000;
+        }
+
+        .legend {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(45, 45, 45, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 12px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .coordinates-display {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(45, 45, 45, 0.9);
+            padding: 10px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 11px;
+        }
+
+        .error-message {
+            background: #dc3545;
+            color: white;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-size: 12px;
+            display: none;
+        }
+
+        .log-area {
+            background: #1a1a1a;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 10px;
+            height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
+            color: #ccc;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <div class="header">
+                <h1>🧭 BRAMPS Viz</h1>
+                <p>Real-time Magnetic Mapping</p>
+            </div>
+
+            <div class="error-message" id="errorMessage"></div>
+
+            <div class="control-section">
+                <h3>📡 Connection</h3>
+                <div class="status-indicator">
+                    <div class="status-dot disconnected" id="connectionStatus"></div>
+                    <span id="connectionText">Disconnected</span>
+                </div>
+                
+                <div class="input-group">
+                    <label>Server URL:</label>
+                    <input type="text" id="serverUrl" value="http://localhost:5000">
+                </div>
+                
+                <button class="button primary" id="connectBtn" onclick="connect()">
+                    Connect to Server
+                </button>
+            </div>
+
+            <div class="control-section">
+                <h3>📍 Mapping Session</h3>
+                <div class="status-indicator">
+                    <div class="status-dot disconnected" id="mappingStatus"></div>
+                    <span id="mappingText">No Active Session</span>
+                </div>
+
+                <div class="input-group">
+                    <label>Device ID:</label>
+                    <input type="text" id="deviceId" value="iPhone_Viz">
+                </div>
+
+                <button class="button success" id="startMappingBtn" onclick="startMapping()" disabled>
+                    Start Mapping
+                </button>
+                
+                <button class="button danger" id="stopMappingBtn" onclick="stopMapping()" style="display: none;">
+                    Stop Mapping
+                </button>
+            </div>
+
+            <div class="control-section">
+                <h3>📊 Statistics</h3>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="fingerprintCount">0</div>
+                        <div class="stat-label">Fingerprints</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="dataRate">0</div>
+                        <div class="stat-label">Rate/sec</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="avgQuality">-</div>
+                        <div class="stat-label">Avg Quality</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="coverage">0</div>
+                        <div class="stat-label">Coverage (m²)</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h3>🎛️ Display Options</h3>
+                <div class="input-group">
+                    <label>
+                        <input type="checkbox" id="showTrail" checked> Show Movement Trail
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label>
+                        <input type="checkbox" id="showQuality" checked> Color by Quality
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label>
+                        <input type="checkbox" id="showAnomaly"> Show Magnetic Anomalies
+                    </label>
+                </div>
+                <button class="button primary" onclick="clearVisualization()">
+                    Clear Display
+                </button>
+            </div>
+
+            <div class="control-section">
+                <h3>📝 Activity Log</h3>
+                <div class="log-area" id="logArea">
+                    System ready...<br>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-view">
+            <div class="canvas-container">
+                <canvas id="mapCanvas"></canvas>
+                
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #4a9eff;"></div>
+                        <span>High Quality (>0.8)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #ffc107;"></div>
+                        <span>Medium Quality (0.5-0.8)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #dc3545;"></div>
+                        <span>Low Quality (<0.5)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #28a745;"></div>
+                        <span>Current Position</span>
+                    </div>
+                </div>
+
+                <div class="coordinates-display" id="coordinatesDisplay">
+                    Lat: -<br>
+                    Lon: -<br>
+                    Alt: - m<br>
+                    Mag: - nT
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let canvas, ctx;
+        let serverUrl = 'http://localhost:5000';
+        let connected = false;
+        let mappingActive = false;
+        let currentSession = null;
+        let fingerprints = [];
+        let currentPosition = null;
+        let trail = [];
+        let stats = {
+            count: 0,
+            qualitySum: 0,
+            lastUpdate: Date.now(),
+            dataPoints: []
+        };
+
+        // Canvas and visualization
+        let viewCenter = { x: 0, y: 0 };
+        let viewScale = 1000; // meters per canvas unit
+        let canvasCenter = { x: 0, y: 0 };
+
+        function init() {
+            canvas = document.getElementById('mapCanvas');
+            ctx = canvas.getContext('2d');
+            
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            
+            // Start polling for data
+            setInterval(pollServerData, 1000);
+            setInterval(updateVisualization, 100);
+            
+            log('System initialized');
+        }
+
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            canvasCenter = { x: canvas.width / 2, y: canvas.height / 2 };
+        }
+
+        function log(message) {
+            const logArea = document.getElementById('logArea');
+            const timestamp = new Date().toLocaleTimeString();
+            logArea.innerHTML += `${timestamp}: ${message}<br>`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        function updateConnectionStatus(isConnected) {
+            connected = isConnected;
+            const statusDot = document.getElementById('connectionStatus');
+            const statusText = document.getElementById('connectionText');
+            const startBtn = document.getElementById('startMappingBtn');
+            
+            if (isConnected) {
+                statusDot.className = 'status-dot connected';
+                statusText.textContent = 'Connected';
+                startBtn.disabled = false;
+            } else {
+                statusDot.className = 'status-dot disconnected';
+                statusText.textContent = 'Disconnected';
+                startBtn.disabled = true;
+            }
+        }
+
+        function updateMappingStatus(isMapping) {
+            mappingActive = isMapping;
+            const statusDot = document.getElementById('mappingStatus');
+            const statusText = document.getElementById('mappingText');
+            const startBtn = document.getElementById('startMappingBtn');
+            const stopBtn = document.getElementById('stopMappingBtn');
+            
+            if (isMapping) {
+                statusDot.className = 'status-dot mapping';
+                statusText.textContent = `Active: ${currentSession}`;
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'block';
+            } else {
+                statusDot.className = 'status-dot disconnected';
+                statusText.textContent = 'No Active Session';
+                startBtn.style.display = 'block';
+                stopBtn.style.display = 'none';
+            }
+        }
+
+        async function connect() {
+            serverUrl = document.getElementById('serverUrl').value.trim();
+            
+            try {
+                const response = await fetch(`${serverUrl}/health`);
+                const result = await response.json();
+                
+                if (result.status === 'healthy') {
+                    updateConnectionStatus(true);
+                    log('Connected to BRAMPS server');
+                } else {
+                    throw new Error('Server not healthy');
+                }
+            } catch (error) {
+                updateConnectionStatus(false);
+                showError(`Connection failed: ${error.message}`);
+                log(`Connection failed: ${error.message}`);
+            }
+        }
+
+        async function startMapping() {
+            if (!connected) {
+                showError('Not connected to server');
+                return;
+            }
+
+            const deviceId = document.getElementById('deviceId').value.trim();
+            
+            try {
+                const response = await fetch(`${serverUrl}/mapping/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        device_id: deviceId,
+                        description: 'Visualization mapping session'
+                    })
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    currentSession = result.session_id;
+                    updateMappingStatus(true);
+                    log(`Started mapping session: ${currentSession}`);
+                    
+                    // Clear previous data
+                    fingerprints = [];
+                    trail = [];
+                    stats = { count: 0, qualitySum: 0, lastUpdate: Date.now(), dataPoints: [] };
+                } else {
+                    throw new Error(result.error);
+                }
+            } catch (error) {
+                showError(`Failed to start mapping: ${error.message}`);
+                log(`Failed to start mapping: ${error.message}`);
+            }
+        }
+
+        async function stopMapping() {
+            if (!currentSession) return;
+
+            try {
+                const response = await fetch(`${serverUrl}/mapping/stop`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: currentSession })
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    updateMappingStatus(false);
+                    log(`Stopped mapping session. Collected ${result.fingerprint_count} fingerprints`);
+                    currentSession = null;
+                } else {
+                    throw new Error(result.error);
+                }
+            } catch (error) {
+                showError(`Failed to stop mapping: ${error.message}`);
+                log(`Failed to stop mapping: ${error.message}`);
+            }
+        }
+
+        async function pollServerData() {
+            if (!connected) return;
+
+            try {
+                // Get server stats
+                const statsResponse = await fetch(`${serverUrl}/stats`);
+                const serverStats = await statsResponse.json();
+                
+                // Get fingerprints
+                const fingerprintsResponse = await fetch(`${serverUrl}/mapping/fingerprints?limit=1000`);
+                const fingerprintsData = await fingerprintsResponse.json();
+                
+                if (fingerprintsData.success) {
+                    updateFingerprints(fingerprintsData.fingerprints);
+                    updateStats(serverStats);
+                }
+            } catch (error) {
+                console.error('Error polling server data:', error);
+            }
+        }
+
+        function updateFingerprints(newFingerprints) {
+            // Add new fingerprints
+            for (const fp of newFingerprints) {
+                if (!fingerprints.find(existing => existing.timestamp === fp.timestamp)) {
+                    fingerprints.push(fp);
+                    
+                    // Add to trail
+                    trail.push({
+                        lat: fp.latitude,
+                        lon: fp.longitude,
+                        quality: fp.quality_score,
+                        timestamp: fp.timestamp
+                    });
+                    
+                    // Update current position
+                    currentPosition = {
+                        lat: fp.latitude,
+                        lon: fp.longitude,
+                        mag_total: fp.mag_total
+                    };
+                }
+            }
+            
+            // Keep trail manageable
+            if (trail.length > 1000) {
+                trail = trail.slice(-1000);
+            }
+        }
+
+        function updateStats(serverStats) {
+            stats.count = fingerprints.length;
+            stats.qualitySum = fingerprints.reduce((sum, fp) => sum + fp.quality_score, 0);
+            
+            // Calculate data rate
+            const now = Date.now();
+            const timeDiff = (now - stats.lastUpdate) / 1000;
+            const newDataPoints = fingerprints.length - (stats.dataPoints.length > 0 ? stats.dataPoints[stats.dataPoints.length - 1] : 0);
+            const dataRate = timeDiff > 0 ? newDataPoints / timeDiff : 0;
+            
+            stats.dataPoints.push(fingerprints.length);
+            if (stats.dataPoints.length > 60) stats.dataPoints.shift();
+            stats.lastUpdate = now;
+            
+            // Update UI
+            document.getElementById('fingerprintCount').textContent = stats.count;
+            document.getElementById('dataRate').textContent = dataRate.toFixed(1);
+            document.getElementById('avgQuality').textContent = 
+                stats.count > 0 ? (stats.qualitySum / stats.count).toFixed(2) : '-';
+            
+            // Calculate coverage area (rough estimate)
+            const coverage = calculateCoverageArea();
+            document.getElementById('coverage').textContent = coverage.toFixed(0);
+            
+            // Update coordinates display
+            if (currentPosition) {
+                document.getElementById('coordinatesDisplay').innerHTML = `
+                    Lat: ${currentPosition.lat.toFixed(6)}<br>
+                    Lon: ${currentPosition.lon.toFixed(6)}<br>
+                    Alt: ${currentPosition.alt || 0} m<br>
+                    Mag: ${currentPosition.mag_total.toFixed(0)} nT
+                `;
+            }
+        }
+
+        function calculateCoverageArea() {
+            if (fingerprints.length < 3) return 0;
+            
+            const lats = fingerprints.map(fp => fp.latitude);
+            const lons = fingerprints.map(fp => fp.longitude);
+            
+            const minLat = Math.min(...lats);
+            const maxLat = Math.max(...lats);
+            const minLon = Math.min(...lons);
+            const maxLon = Math.max(...lons);
+            
+            // Rough area calculation in square meters
+            const latDiff = (maxLat - minLat) * 111000; // degrees to meters
+            const lonDiff = (maxLon - minLon) * 111000 * Math.cos(minLat * Math.PI / 180);
+            
+            return latDiff * lonDiff;
+        }
+
+        function updateVisualization() {
+            if (!canvas || fingerprints.length === 0) return;
+            
+            // Clear canvas
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Auto-center view on data
+            if (fingerprints.length > 0) {
+                const lats = fingerprints.map(fp => fp.latitude);
+                const lons = fingerprints.map(fp => fp.longitude);
+                
+                viewCenter.lat = (Math.min(...lats) + Math.max(...lats)) / 2;
+                viewCenter.lon = (Math.min(...lons) + Math.max(...lons)) / 2;
+                
+                // Auto-scale to fit data
+                const latRange = Math.max(...lats) - Math.min(...lats);
+                const lonRange = Math.max(...lons) - Math.min(...lons);
+                const maxRange = Math.max(latRange, lonRange);
+                viewScale = maxRange > 0 ? (Math.min(canvas.width, canvas.height) * 0.8) / (maxRange * 111000) : 1000;
+            }
+            
+            // Draw grid
+            drawGrid();
+            
+            // Draw trail
+            if (document.getElementById('showTrail').checked) {
+                drawTrail();
+            }
+            
+            // Draw fingerprints
+            drawFingerprints();
+            
+            // Draw current position
+            if (currentPosition) {
+                drawCurrentPosition();
+            }
+        }
+
+        function latLonToCanvas(lat, lon) {
+            const x = canvasCenter.x + (lon - viewCenter.lon) * 111000 * Math.cos(lat * Math.PI / 180) * viewScale;
+            const y = canvasCenter.y - (lat - viewCenter.lat) * 111000 * viewScale;
+            return { x, y };
+        }
+
+        function drawGrid() {
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1;
+            
+            // Draw grid lines every 10 meters
+            const gridSpacing = 10; // meters
+            const gridPixels = gridSpacing * viewScale;
+            
+            if (gridPixels > 20) { // Only draw if grid is not too dense
+                for (let x = 0; x < canvas.width; x += gridPixels) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, canvas.height);
+                    ctx.stroke();
+                }
+                
+                for (let y = 0; y < canvas.height; y += gridPixels) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(canvas.width, y);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        function drawTrail() {
+            if (trail.length < 2) return;
+            
+            ctx.strokeStyle = '#4a9eff';
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.6;
+            
+            ctx.beginPath();
+            for (let i = 0; i < trail.length; i++) {
+                const pos = latLonToCanvas(trail[i].lat, trail[i].lon);
+                if (i === 0) {
+                    ctx.moveTo(pos.x, pos.y);
+                } else {
+                    ctx.lineTo(pos.x, pos.y);
+                }
+            }
+            ctx.stroke();
+            
+            ctx.globalAlpha = 1.0;
+        }
+
+        function drawFingerprints() {
+            const showQuality = document.getElementById('showQuality').checked;
+            
+            for (const fp of fingerprints) {
+                const pos = latLonToCanvas(fp.latitude, fp.longitude);
+                
+                // Color by quality
+                let color = '#4a9eff';
+                if (showQuality) {
+                    if (fp.quality_score > 0.8) color = '#4a9eff';
+                    else if (fp.quality_score > 0.5) color = '#ffc107';
+                    else color = '#dc3545';
+                }
+                
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 3, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+
+        function drawCurrentPosition() {
+            const pos = latLonToCanvas(currentPosition.lat, currentPosition.lon);
+            
+            // Draw pulsing circle for current position
+            const pulseSize = 8 + Math.sin(Date.now() / 200) * 3;
+            
+            ctx.fillStyle = '#28a745';
+            ctx.globalAlpha = 0.8;
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, pulseSize, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            ctx.strokeStyle = '#28a745';
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.4;
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, pulseSize + 5, 0, 2 * Math.PI);
+            ctx.stroke();
+            
+            ctx.globalAlpha = 1.0;
+        }
+
+        function clearVisualization() {
+            fingerprints = [];
+            trail = [];
+            currentPosition = null;
+            stats = { count: 0, qualitySum: 0, lastUpdate: Date.now(), dataPoints: [] };
+            
+            document.getElementById('fingerprintCount').textContent = '0';
+            document.getElementById('avgQuality').textContent = '-';
+            document.getElementById('coverage').textContent = '0';
+            
+            log('Visualization cleared');
+        }
+
+        // Initialize when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

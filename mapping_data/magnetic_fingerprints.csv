@@ -1,0 +1,2 @@
+timestamp,latitude,longitude,altitude,mag_x,mag_y,mag_z,mag_total,quality_score,device_id,session_id
+2025-11-08T11:34:59.024819,43.6532,-79.3832,100.0,18000.0,-3000.0,49000.0,52287.66584960549,1.0,test_device,session_20251108_113445

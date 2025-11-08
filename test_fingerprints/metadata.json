@@ -1,0 +1,11 @@
+{
+  "total_fingerprints": 10,
+  "last_updated": "2025-11-08T11:28:13.753623",
+  "sessions": [
+    "test_session_1",
+    "test_session_0"
+  ],
+  "devices": [
+    "test_device"
+  ]
+}

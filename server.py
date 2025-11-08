@@ -13,6 +13,17 @@ import socket
 import threading
 from threading import Lock
 
+# Import BRAMPS modules
+try:
+    from fingerprint_storage import FingerprintStorage, MagneticFingerprint
+    from magnetic_field_model import MagneticFieldModel
+    from imu_dead_reckoning import IMUDeadReckoning
+    from map_manager import MapManager
+    BRAMPS_MODULES_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"BRAMPS modules not available: {e}")
+    BRAMPS_MODULES_AVAILABLE = False
+
 # Configure logging with UTF-8 encoding for file, ASCII-safe for console
 import sys
 
@@ -43,8 +54,34 @@ stats = {
     'udp_packets': 0,  # Track UDP packets separately
     'http_packets': 0,  # Track HTTP packets separately
     'last_udp_time': None,  # Last UDP packet time
-    'last_http_time': None  # Last HTTP packet time
+    'last_http_time': None,  # Last HTTP packet time
+    'mapping_packets': 0,  # Track mapping packets
+    'fingerprints_created': 0  # Track fingerprints created
 }
+
+# Initialize BRAMPS modules if available
+fingerprint_storage = None
+magnetic_model = None
+dead_reckoning = None
+map_manager = None
+if BRAMPS_MODULES_AVAILABLE:
+    try:
+        fingerprint_storage = FingerprintStorage("mapping_data")
+        magnetic_model = MagneticFieldModel()
+        dead_reckoning = IMUDeadReckoning()
+        map_manager = MapManager("maps")
+        logger.info("BRAMPS modules initialized: fingerprint storage, magnetic model, dead-reckoning, map manager")
+    except Exception as e:
+        logger.error(f"Failed to initialize BRAMPS modules: {e}")
+        BRAMPS_MODULES_AVAILABLE = False
+
+# Mapping session tracking
+mapping_sessions = {}
+mapping_lock = Lock()
+
+# Navigation session tracking
+navigation_sessions = {}
+navigation_lock = Lock()
 
 # Store recent data for debugging (last 100 packets)
 recent_data = []
@@ -176,6 +213,27 @@ def process_sensor_data(data, source='HTTP'):
             # Use safe logging function
             log_imu_data(stats['total_packets'], source, sensor_data, accel_magnitude, gyro_magnitude, mag_magnitude)
         
+        # Update dead-reckoning if available and navigation is active
+        if dead_reckoning and BRAMPS_MODULES_AVAILABLE:
+            with navigation_lock:
+                # Check if any navigation session is active
+                has_active_session = any(s['active'] for s in navigation_sessions.values())
+            
+            if has_active_session:
+                try:
+                    # Update dead-reckoning with IMU data
+                    dead_reckoning.update(
+                        accel_x=sensor_data['accel_x'],
+                        accel_y=sensor_data['accel_y'],
+                        accel_z=sensor_data['accel_z'],
+                        gyro_x=sensor_data['gyro_x'],
+                        gyro_y=sensor_data['gyro_y'],
+                        gyro_z=sensor_data['gyro_z'],
+                        timestamp_ms=sensor_data['timestamp']
+                    )
+                except Exception as e:
+                    logger.error(f"Error updating dead-reckoning: {e}")
+        
         return sensor_data
     except Exception as e:
         logger.error(f"Error processing sensor data: {e}", exc_info=True)
@@ -251,13 +309,305 @@ def index():
                 'service': 'BRAMPS IMU Data Collection Server',
                 'endpoints': {
                     '/': 'GET - iPhone IMU Monitor (HTML interface)',
+                    '/navigation.html': 'GET - Indoor navigation interface with map display',
+                    '/mapping.html': 'GET - GPS-enabled mapping interface',
+                    '/visualization.html': 'GET - Real-time magnetic fingerprint visualization',
+                    '/index.html': 'GET - Basic IMU monitor interface',
                     '/imu': 'POST - Receive IMU sensor data',
+                    '/maps/upload': 'POST - Upload floor plan map',
+                    '/maps': 'GET - List all maps',
+                    '/maps/<id>': 'GET/DELETE - Get or delete specific map',
+                    '/maps/<id>/activate': 'POST - Set active map',
+                    '/maps/<id>/calibrate': 'POST - Update map calibration',
+                    '/maps/<id>/image': 'GET - Get map image file',
+                    '/navigation/start': 'POST - Start navigation session',
+                    '/navigation/stop': 'POST - Stop navigation session',
+                    '/navigation/position': 'GET - Get current position',
+                    '/navigation/history': 'GET - Get position history trail',
+                    '/navigation/reset': 'POST - Reset navigation position',
+                    '/mapping/start': 'POST - Start mapping session',
+                    '/mapping/stop': 'POST - Stop mapping session',
+                    '/mapping/data': 'POST - Send mapping data',
+                    '/mapping/sessions': 'GET - List mapping sessions',
+                    '/mapping/fingerprints': 'GET - Get fingerprints',
                     '/stats': 'GET - Get server statistics',
                     '/health': 'GET - Health check',
                     '/debug': 'GET - Debug information'
                 },
                 'note': 'If you see this JSON, no HTML files found in server directory'
             })
+
+# HTML file routes for network access
+@app.route('/mapping.html')
+def mapping_page():
+    """Serve the GPS-enabled mapping interface"""
+    try:
+        return send_from_directory('.', 'mapping.html')
+    except Exception as e:
+        logger.error(f"Could not serve mapping.html: {e}")
+        return jsonify({'error': 'mapping.html not found'}), 404
+
+@app.route('/visualization.html')
+def visualization_page():
+    """Serve the real-time magnetic fingerprint visualization"""
+    try:
+        return send_from_directory('.', 'visualization.html')
+    except Exception as e:
+        logger.error(f"Could not serve visualization.html: {e}")
+        return jsonify({'error': 'visualization.html not found'}), 404
+
+@app.route('/index.html')
+def imu_monitor_page():
+    """Serve the basic IMU monitor interface"""
+    try:
+        return send_from_directory('.', 'index.html')
+    except Exception as e:
+        logger.error(f"Could not serve index.html: {e}")
+        return jsonify({'error': 'index.html not found'}), 404
+
+@app.route('/iphone_monitor.html')
+def iphone_monitor_page():
+    """Serve the iPhone monitor interface"""
+    try:
+        return send_from_directory('.', 'iphone_monitor.html')
+    except Exception as e:
+        logger.error(f"Could not serve iphone_monitor.html: {e}")
+        return jsonify({'error': 'iphone_monitor.html not found'}), 404
+
+@app.route('/navigation.html')
+def navigation_page():
+    """Serve the navigation interface"""
+    try:
+        return send_from_directory('.', 'navigation.html')
+    except Exception as e:
+        logger.error(f"Could not serve navigation.html: {e}")
+        return jsonify({'error': 'navigation.html not found'}), 404
+
+@app.route('/trail_tracker.html')
+def trail_tracker_page():
+    """Serve the trail tracker interface"""
+    try:
+        return send_from_directory('.', 'trail_tracker.html')
+    except Exception as e:
+        logger.error(f"Could not serve trail_tracker.html: {e}")
+        return jsonify({'error': 'trail_tracker.html not found'}), 404
+
+# Static file serving for CSS, JS, and other assets
+@app.route('/<path:filename>')
+def serve_static_files(filename):
+    """Serve static files (CSS, JS, images, etc.)"""
+    try:
+        return send_from_directory('.', filename)
+    except Exception as e:
+        logger.error(f"Could not serve static file {filename}: {e}")
+        return jsonify({'error': f'File {filename} not found'}), 404
+
+# Mapping endpoints for GPS-enabled fingerprint collection
+@app.route('/mapping/start', methods=['POST'])
+def start_mapping_session():
+    """Start a new mapping session."""
+    if not BRAMPS_MODULES_AVAILABLE:
+        return jsonify({'error': 'BRAMPS modules not available'}), 500
+        
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id', f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        device_id = data.get('device_id', 'unknown')
+        description = data.get('description', 'Mapping session')
+        
+        with mapping_lock:
+            mapping_sessions[session_id] = {
+                'device_id': device_id,
+                'description': description,
+                'start_time': datetime.now(),
+                'fingerprint_count': 0,
+                'active': True
+            }
+            
+        logger.info(f"Started mapping session: {session_id} for device: {device_id}")
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'message': f'Mapping session {session_id} started'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error starting mapping session: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/mapping/stop', methods=['POST'])
+def stop_mapping_session():
+    """Stop an active mapping session."""
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+        
+        if not session_id:
+            return jsonify({'error': 'session_id required'}), 400
+            
+        with mapping_lock:
+            if session_id in mapping_sessions:
+                mapping_sessions[session_id]['active'] = False
+                mapping_sessions[session_id]['end_time'] = datetime.now()
+                fingerprint_count = mapping_sessions[session_id]['fingerprint_count']
+            else:
+                return jsonify({'error': 'Session not found'}), 404
+                
+        # Save fingerprints to disk
+        if fingerprint_storage:
+            fingerprint_storage.save_to_disk()
+            
+        logger.info(f"Stopped mapping session: {session_id} with {fingerprint_count} fingerprints")
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'fingerprint_count': fingerprint_count,
+            'message': f'Mapping session {session_id} stopped'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error stopping mapping session: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/mapping/data', methods=['POST'])
+def receive_mapping_data():
+    """Receive IMU + GPS data for magnetic fingerprinting."""
+    if not BRAMPS_MODULES_AVAILABLE:
+        return jsonify({'error': 'BRAMPS modules not available'}), 500
+        
+    try:
+        data = request.get_json()
+        
+        # Extract required fields
+        session_id = data.get('session_id')
+        if not session_id or session_id not in mapping_sessions:
+            return jsonify({'error': 'Invalid or missing session_id'}), 400
+            
+        if not mapping_sessions[session_id]['active']:
+            return jsonify({'error': 'Mapping session is not active'}), 400
+            
+        # Extract sensor data
+        timestamp = datetime.now()
+        latitude = data.get('latitude')
+        longitude = data.get('longitude')
+        altitude = data.get('altitude', 0.0)
+        mag_x = data.get('mag_x')
+        mag_y = data.get('mag_y')
+        mag_z = data.get('mag_z')
+        
+        # Validate required fields
+        if any(x is None for x in [latitude, longitude, mag_x, mag_y, mag_z]):
+            return jsonify({'error': 'Missing required fields: latitude, longitude, mag_x, mag_y, mag_z'}), 400
+            
+        # Create magnetic fingerprint
+        fingerprint = MagneticFingerprint(
+            timestamp=timestamp,
+            latitude=float(latitude),
+            longitude=float(longitude),
+            altitude=float(altitude),
+            mag_x=float(mag_x),
+            mag_y=float(mag_y),
+            mag_z=float(mag_z),
+            device_id=mapping_sessions[session_id]['device_id'],
+            session_id=session_id
+        )
+        
+        # Add to storage
+        if fingerprint_storage.add_fingerprint(fingerprint):
+            with mapping_lock:
+                mapping_sessions[session_id]['fingerprint_count'] += 1
+                stats['fingerprints_created'] += 1
+                
+            # Update statistics
+            stats['mapping_packets'] += 1
+            
+            logger.debug(f"Added fingerprint: session={session_id}, lat={latitude:.6f}, lon={longitude:.6f}")
+            
+            return jsonify({
+                'success': True,
+                'fingerprint_id': len(fingerprint_storage.fingerprints),
+                'quality_score': fingerprint.quality_score,
+                'session_fingerprints': mapping_sessions[session_id]['fingerprint_count']
+            })
+        else:
+            return jsonify({'error': 'Fingerprint rejected due to quality'}), 400
+            
+    except Exception as e:
+        logger.error(f"Error processing mapping data: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/mapping/sessions', methods=['GET'])
+def get_mapping_sessions():
+    """Get list of mapping sessions."""
+    try:
+        with mapping_lock:
+            sessions = {}
+            for session_id, session_data in mapping_sessions.items():
+                sessions[session_id] = {
+                    'device_id': session_data['device_id'],
+                    'description': session_data['description'],
+                    'start_time': session_data['start_time'].isoformat(),
+                    'fingerprint_count': session_data['fingerprint_count'],
+                    'active': session_data['active']
+                }
+                if 'end_time' in session_data:
+                    sessions[session_id]['end_time'] = session_data['end_time'].isoformat()
+                    
+        return jsonify({
+            'success': True,
+            'sessions': sessions,
+            'total_sessions': len(sessions)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting mapping sessions: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/mapping/fingerprints', methods=['GET'])
+def get_fingerprints():
+    """Get magnetic fingerprints with optional filtering."""
+    if not BRAMPS_MODULES_AVAILABLE:
+        return jsonify({'error': 'BRAMPS modules not available'}), 500
+        
+    try:
+        # Get query parameters
+        session_id = request.args.get('session_id')
+        lat = request.args.get('latitude', type=float)
+        lon = request.args.get('longitude', type=float)
+        max_distance = request.args.get('max_distance', 1000.0, type=float)
+        limit = request.args.get('limit', 100, type=int)
+        
+        fingerprints_data = []
+        
+        if lat is not None and lon is not None:
+            # Find fingerprints near a location
+            nearest = fingerprint_storage.find_nearest_fingerprints(
+                lat, lon, max_distance=max_distance, max_count=limit
+            )
+            for fp, distance in nearest:
+                fp_data = fp.to_dict()
+                fp_data['distance'] = distance
+                fingerprints_data.append(fp_data)
+        else:
+            # Get all fingerprints (or filtered by session)
+            for fp in fingerprint_storage.fingerprints:
+                if session_id is None or fp.session_id == session_id:
+                    fingerprints_data.append(fp.to_dict())
+                    if len(fingerprints_data) >= limit:
+                        break
+                        
+        return jsonify({
+            'success': True,
+            'fingerprints': fingerprints_data,
+            'count': len(fingerprints_data),
+            'total_stored': len(fingerprint_storage.fingerprints)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting fingerprints: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -340,6 +690,15 @@ def get_stats():
         time_since_udp = (current_time - stats['last_udp_time']).total_seconds()
         udp_recent = time_since_udp < 5.0
     
+    # Get mapping statistics
+    mapping_stats = {}
+    if BRAMPS_MODULES_AVAILABLE and fingerprint_storage:
+        mapping_stats = {
+            'total_fingerprints': len(fingerprint_storage.fingerprints),
+            'active_sessions': sum(1 for s in mapping_sessions.values() if s['active']),
+            'total_sessions': len(mapping_sessions)
+        }
+    
     return jsonify({
         'total_packets': stats['total_packets'],
         'packets_per_second': round(stats['packets_per_second'], 2),
@@ -349,10 +708,14 @@ def get_stats():
         'recent_packets_count': len(recent_data),
         'udp_packets': stats['udp_packets'],
         'http_packets': stats['http_packets'],
+        'mapping_packets': stats['mapping_packets'],
+        'fingerprints_created': stats['fingerprints_created'],
         'last_udp_time': stats['last_udp_time'].isoformat() if stats['last_udp_time'] else None,
         'last_http_time': stats['last_http_time'].isoformat() if stats['last_http_time'] else None,
         'udp_recent': udp_recent,  # True if UDP data received in last 5 seconds
-        'time_since_last_udp': (current_time - stats['last_udp_time']).total_seconds() if stats['last_udp_time'] else None
+        'time_since_last_udp': (current_time - stats['last_udp_time']).total_seconds() if stats['last_udp_time'] else None,
+        'mapping': mapping_stats,
+        'bramps_available': BRAMPS_MODULES_AVAILABLE
     })
 
 @app.route('/recent', methods=['GET'])
@@ -389,6 +752,348 @@ def debug_info():
         'sample_recent_data': recent_data[-1] if recent_data else None,
         'all_recent_data': recent_data[-5:] if len(recent_data) >= 5 else recent_data
     })
+
+# ============================================================================
+# MAP MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@app.route('/maps/upload', methods=['POST'])
+def upload_map():
+    """Upload a new floor plan map."""
+    if not BRAMPS_MODULES_AVAILABLE or not map_manager:
+        return jsonify({'error': 'Map manager not available'}), 500
+    
+    try:
+        # Check if file is present
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Get metadata from form data
+        name = request.form.get('name', 'Unnamed Map')
+        description = request.form.get('description', '')
+        scale = float(request.form.get('scale_meters_per_pixel', 0.1))
+        origin_x = float(request.form.get('origin_x', 0.0))
+        origin_y = float(request.form.get('origin_y', 0.0))
+        rotation = float(request.form.get('rotation_degrees', 0.0))
+        
+        # Upload map
+        map_id = map_manager.upload_map(
+            file,
+            name=name,
+            description=description,
+            scale_meters_per_pixel=scale,
+            origin_x=origin_x,
+            origin_y=origin_y,
+            rotation_degrees=rotation
+        )
+        
+        if map_id:
+            map_data = map_manager.get_map(map_id)
+            return jsonify({
+                'success': True,
+                'map_id': map_id,
+                'map': map_data,
+                'message': f'Map "{name}" uploaded successfully'
+            })
+        else:
+            return jsonify({'error': 'Failed to upload map'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error uploading map: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/maps', methods=['GET'])
+def list_maps():
+    """Get list of all maps."""
+    if not BRAMPS_MODULES_AVAILABLE or not map_manager:
+        return jsonify({'error': 'Map manager not available'}), 500
+    
+    try:
+        maps = map_manager.list_maps()
+        active_map = map_manager.get_active_map()
+        
+        return jsonify({
+            'success': True,
+            'maps': maps,
+            'active_map_id': map_manager.active_map_id,
+            'active_map': active_map,
+            'count': len(maps)
+        })
+    except Exception as e:
+        logger.error(f"Error listing maps: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/maps/<map_id>', methods=['GET'])
+def get_map(map_id):
+    """Get specific map metadata."""
+    if not BRAMPS_MODULES_AVAILABLE or not map_manager:
+        return jsonify({'error': 'Map manager not available'}), 500
+    
+    try:
+        map_data = map_manager.get_map(map_id)
+        if map_data:
+            return jsonify({
+                'success': True,
+                'map': map_data
+            })
+        else:
+            return jsonify({'error': 'Map not found'}), 404
+    except Exception as e:
+        logger.error(f"Error getting map: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/maps/<map_id>', methods=['DELETE'])
+def delete_map(map_id):
+    """Delete a map."""
+    if not BRAMPS_MODULES_AVAILABLE or not map_manager:
+        return jsonify({'error': 'Map manager not available'}), 500
+    
+    try:
+        if map_manager.delete_map(map_id):
+            return jsonify({
+                'success': True,
+                'message': f'Map {map_id} deleted'
+            })
+        else:
+            return jsonify({'error': 'Failed to delete map'}), 500
+    except Exception as e:
+        logger.error(f"Error deleting map: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/maps/<map_id>/activate', methods=['POST'])
+def activate_map(map_id):
+    """Set active map for navigation."""
+    if not BRAMPS_MODULES_AVAILABLE or not map_manager:
+        return jsonify({'error': 'Map manager not available'}), 500
+    
+    try:
+        if map_manager.set_active_map(map_id):
+            return jsonify({
+                'success': True,
+                'active_map_id': map_id,
+                'message': f'Map {map_id} activated'
+            })
+        else:
+            return jsonify({'error': 'Map not found'}), 404
+    except Exception as e:
+        logger.error(f"Error activating map: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/maps/<map_id>/calibrate', methods=['POST'])
+def calibrate_map(map_id):
+    """Update map calibration parameters."""
+    if not BRAMPS_MODULES_AVAILABLE or not map_manager:
+        return jsonify({'error': 'Map manager not available'}), 500
+    
+    try:
+        data = request.get_json()
+        
+        success = map_manager.update_map_calibration(
+            map_id,
+            scale_meters_per_pixel=data.get('scale_meters_per_pixel'),
+            origin_x=data.get('origin_x'),
+            origin_y=data.get('origin_y'),
+            rotation_degrees=data.get('rotation_degrees')
+        )
+        
+        if success:
+            map_data = map_manager.get_map(map_id)
+            return jsonify({
+                'success': True,
+                'map': map_data,
+                'message': 'Map calibration updated'
+            })
+        else:
+            return jsonify({'error': 'Failed to update calibration'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error calibrating map: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/maps/<map_id>/image', methods=['GET'])
+def get_map_image(map_id):
+    """Get map image file."""
+    if not BRAMPS_MODULES_AVAILABLE or not map_manager:
+        return jsonify({'error': 'Map manager not available'}), 500
+    
+    try:
+        map_data = map_manager.get_map(map_id)
+        if not map_data:
+            return jsonify({'error': 'Map not found'}), 404
+        
+        image_filename = map_data['image_filename']
+        return send_from_directory(map_manager.maps_directory, image_filename)
+        
+    except Exception as e:
+        logger.error(f"Error getting map image: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# NAVIGATION ENDPOINTS
+# ============================================================================
+
+@app.route('/navigation/start', methods=['POST'])
+def start_navigation():
+    """Start a navigation session."""
+    if not BRAMPS_MODULES_AVAILABLE or not dead_reckoning:
+        return jsonify({'error': 'Navigation system not available'}), 500
+    
+    try:
+        data = request.get_json()
+        
+        # Get initial position and heading
+        initial_x = float(data.get('initial_x', 0.0))
+        initial_y = float(data.get('initial_y', 0.0))
+        initial_heading = float(data.get('initial_heading', 0.0))
+        
+        # Reset dead-reckoning
+        dead_reckoning.reset(position=(initial_x, initial_y), heading=initial_heading)
+        
+        # Create navigation session
+        session_id = f"nav_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        with navigation_lock:
+            navigation_sessions[session_id] = {
+                'session_id': session_id,
+                'start_time': datetime.now(),
+                'initial_position': (initial_x, initial_y),
+                'initial_heading': initial_heading,
+                'active': True,
+                'map_id': map_manager.active_map_id if map_manager else None
+            }
+        
+        logger.info(f"Navigation session started: {session_id}")
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'initial_position': {'x': initial_x, 'y': initial_y},
+            'initial_heading': initial_heading,
+            'message': 'Navigation session started'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error starting navigation: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/navigation/stop', methods=['POST'])
+def stop_navigation():
+    """Stop navigation session."""
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+        
+        if not session_id:
+            return jsonify({'error': 'session_id required'}), 400
+        
+        with navigation_lock:
+            if session_id in navigation_sessions:
+                navigation_sessions[session_id]['active'] = False
+                navigation_sessions[session_id]['end_time'] = datetime.now()
+            else:
+                return jsonify({'error': 'Session not found'}), 404
+        
+        logger.info(f"Navigation session stopped: {session_id}")
+        
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'message': 'Navigation session stopped'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error stopping navigation: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/navigation/position', methods=['GET'])
+def get_current_position():
+    """Get current position from dead-reckoning."""
+    if not BRAMPS_MODULES_AVAILABLE or not dead_reckoning:
+        return jsonify({'error': 'Navigation system not available'}), 500
+    
+    try:
+        state = dead_reckoning.get_state()
+        
+        # Add pixel coordinates if map is active
+        if map_manager and map_manager.active_map_id:
+            pixel_coords = map_manager.world_to_pixel(
+                state['position']['x'],
+                state['position']['y']
+            )
+            if pixel_coords:
+                state['pixel_position'] = {
+                    'x': pixel_coords[0],
+                    'y': pixel_coords[1]
+                }
+        
+        return jsonify({
+            'success': True,
+            'position': state
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting position: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/navigation/history', methods=['GET'])
+def get_position_history():
+    """Get position history trail."""
+    if not BRAMPS_MODULES_AVAILABLE or not dead_reckoning:
+        return jsonify({'error': 'Navigation system not available'}), 500
+    
+    try:
+        limit = request.args.get('limit', type=int)
+        history = dead_reckoning.get_position_history(limit=limit)
+        
+        # Add pixel coordinates if map is active
+        if map_manager and map_manager.active_map_id:
+            for point in history:
+                pixel_coords = map_manager.world_to_pixel(point['x'], point['y'])
+                if pixel_coords:
+                    point['pixel_x'] = pixel_coords[0]
+                    point['pixel_y'] = pixel_coords[1]
+        
+        return jsonify({
+            'success': True,
+            'history': history,
+            'count': len(history)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting position history: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/navigation/reset', methods=['POST'])
+def reset_navigation():
+    """Reset navigation position."""
+    if not BRAMPS_MODULES_AVAILABLE or not dead_reckoning:
+        return jsonify({'error': 'Navigation system not available'}), 500
+    
+    try:
+        data = request.get_json()
+        
+        x = float(data.get('x', 0.0))
+        y = float(data.get('y', 0.0))
+        heading = float(data.get('heading', 0.0))
+        
+        dead_reckoning.reset(position=(x, y), heading=heading)
+        
+        logger.info(f"Navigation reset to position ({x}, {y}), heading {heading}")
+        
+        return jsonify({
+            'success': True,
+            'position': {'x': x, 'y': y},
+            'heading': heading,
+            'message': 'Navigation position reset'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting navigation: {e}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     # Get ports from environment variables or use defaults
