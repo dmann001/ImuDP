@@ -56,7 +56,9 @@ recent_data = []
 recent_data_lock = threading.Lock()  # Thread safety for recent_data
 
 # Create an instance of the AdvancedTrailTracker
-trail_tracker = AdvancedTrailTracker()
+# Expected data rate in Hz (50-100 Hz recommended)
+expected_hz = int(os.environ.get('EXPECTED_HZ', 100))
+trail_tracker = AdvancedTrailTracker(expected_hz=expected_hz)
 
 def log_imu_data(packet_num, source, sensor_data, accel_mag, gyro_mag, mag_mag):
     """Log IMU data with emoji-safe console output"""
@@ -301,6 +303,83 @@ def reset_trail():
     """Resets the dead-reckoning trail."""
     trail_tracker.reset()
     return jsonify({'status': 'ok', 'message': 'Trail reset successfully.'})
+
+@app.route('/set_expected_hz', methods=['POST'])
+def set_expected_hz():
+    """Change the expected data rate (Hz) dynamically.
+    
+    Recommended: 50-100 Hz for best accuracy
+    """
+    global trail_tracker  # Declare global at the start of the function
+    
+    try:
+        data = request.get_json()
+        if not data or 'hz' not in data:
+            return jsonify({'error': 'Missing "hz" parameter'}), 400
+        
+        new_hz = int(data['hz'])
+        
+        if new_hz < 10 or new_hz > 200:
+            return jsonify({
+                'error': f'Invalid Hz value. Must be between 10 and 200. Recommended: 50-100 Hz'
+            }), 400
+        
+        # Create new tracker with new Hz (preserve current position if desired)
+        current_pos = trail_tracker.position.copy()
+        current_heading = trail_tracker.heading
+        
+        trail_tracker = AdvancedTrailTracker(expected_hz=new_hz)
+        trail_tracker.position = current_pos
+        trail_tracker.heading = current_heading
+        
+        logger.info(f"Expected Hz changed to: {new_hz}")
+        return jsonify({
+            'status': 'ok',
+            'message': f'Expected data rate changed to: {new_hz} Hz',
+            'expected_hz': new_hz
+        })
+    except ValueError:
+        return jsonify({'error': 'Invalid Hz value. Must be a number.'}), 400
+    except Exception as e:
+        logger.error(f"Error setting expected Hz: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_expected_hz', methods=['GET'])
+def get_expected_hz():
+    """Get the current expected data rate (Hz)."""
+    return jsonify({
+        'expected_hz': trail_tracker.expected_hz,
+        'velocity_damping': trail_tracker.velocity_damping,
+        'note': 'Recommended: 50-100 Hz for best accuracy'
+    })
+
+@app.route('/diagnostics', methods=['GET'])
+def diagnostics():
+    """Get diagnostic information about the current state and recent sensor data."""
+    state = trail_tracker.get_state()
+    
+    # Get recent sensor data
+    recent_sensor = None
+    with recent_data_lock:
+        if recent_data:
+            recent_sensor = recent_data[-1]
+    
+    return jsonify({
+        'current_state': state,
+        'recent_sensor_data': recent_sensor,
+        'parameters': {
+            'accel_move_threshold': trail_tracker.accel_move_threshold,
+            'accel_deadzone': trail_tracker.accel_deadzone,
+            'velocity_threshold': trail_tracker.velocity_threshold,
+            'stationary_threshold': trail_tracker.stationary_threshold,
+            'expected_hz': trail_tracker.expected_hz
+        },
+        'stats': {
+            'total_packets': stats['total_packets'],
+            'packets_per_second': stats['packets_per_second'],
+            'last_packet_time': stats['last_packet_time'].isoformat() if stats['last_packet_time'] else None
+        }
+    })
 
 
 @app.route('/imu', methods=['POST', 'OPTIONS'])

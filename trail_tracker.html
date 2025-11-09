@@ -111,6 +111,15 @@
         <div class="panel">
             <h2>Controls</h2>
             <button id="resetButton">Reset Trail</button>
+            <div style="margin-top: 12px;">
+                <label for="expectedHz" style="display: block; margin-bottom: 8px; font-size: 12px; color: var(--muted-foreground);">Expected Data Rate (Hz):</label>
+                <select id="expectedHz" style="width: 100%; padding: 8px; background: var(--input); color: var(--foreground); border: 1px solid var(--border); border-radius: var(--radius); font-size: 14px;">
+                    <option value="50">50 Hz</option>
+                    <option value="60">60 Hz</option>
+                    <option value="75">75 Hz</option>
+                    <option value="100" selected>100 Hz (Recommended)</option>
+                </select>
+            </div>
         </div>
         <div class="panel">
             <h2>Dashboard</h2>
@@ -153,6 +162,7 @@
         const statPosY = document.getElementById('stat-pos-y');
         const statVelocity = document.getElementById('stat-velocity');
         const statHeading = document.getElementById('stat-heading');
+        const expectedHzSelect = document.getElementById('expectedHz');
 
         let trailData = { path: [] };
         let view = {
@@ -189,10 +199,41 @@
         }
         
         function updateDashboard(data) {
-            statPosX.textContent = data.position.x.toFixed(2);
-            statPosY.textContent = data.position.y.toFixed(2);
-            statVelocity.textContent = data.velocity.toFixed(2);
-            statHeading.textContent = data.heading.toFixed(0);
+            // Handle the nested structure from server response
+            const state = data.current_state || data;
+            const position = state.position || {};
+            const velocity = state.velocity || {};
+            
+            // Update position
+            if (position.x !== undefined) {
+                statPosX.textContent = position.x.toFixed(2);
+            } else {
+                statPosX.textContent = '--';
+            }
+            
+            if (position.y !== undefined) {
+                statPosY.textContent = position.y.toFixed(2);
+            } else {
+                statPosY.textContent = '--';
+            }
+            
+            // Update velocity (use speed if available, otherwise use magnitude)
+            if (velocity.speed !== undefined) {
+                statVelocity.textContent = velocity.speed.toFixed(2);
+            } else if (velocity !== undefined && typeof velocity === 'number') {
+                statVelocity.textContent = velocity.toFixed(2);
+            } else {
+                statVelocity.textContent = '--';
+            }
+            
+            // Update heading (use heading_deg if available, otherwise heading)
+            if (state.heading_deg !== undefined) {
+                statHeading.textContent = state.heading_deg.toFixed(0);
+            } else if (state.heading !== undefined) {
+                statHeading.textContent = state.heading.toFixed(0);
+            } else {
+                statHeading.textContent = '--';
+            }
         }
 
         function draw() {
@@ -210,14 +251,20 @@
                 ctx.beginPath();
                 ctx.strokeStyle = 'hsl(0 0% 98%)';
                 ctx.lineWidth = 2 / view.scale;
-                ctx.moveTo(path[0][0], path[0][1]);
+                
+                // Handle both array format [x, y] and object format {x, y}
+                const getX = (point) => Array.isArray(point) ? point[0] : (point.x || 0);
+                const getY = (point) => Array.isArray(point) ? point[1] : (point.y || 0);
+                
+                ctx.moveTo(getX(path[0]), getY(path[0]));
                 for (let i = 1; i < path.length; i++) {
-                    ctx.lineTo(path[i][0], path[i][1]);
+                    ctx.lineTo(getX(path[i]), getY(path[i]));
                 }
                 ctx.stroke();
                 
-                drawDot(path[0][0], path[0][1], 'hsl(142.1 76.2% 42.2%)'); // Start
-                drawDot(path[path.length - 1][0], path[path.length - 1][1], 'hsl(346.8 77.2% 49.8%)'); // Current
+                // Draw start and end points
+                drawDot(getX(path[0]), getY(path[0]), 'hsl(142.1 76.2% 42.2%)'); // Start
+                drawDot(getX(path[path.length - 1]), getY(path[path.length - 1]), 'hsl(346.8 77.2% 49.8%)'); // Current
             }
 
             ctx.restore();
@@ -301,8 +348,44 @@
             fetchData();
         }
 
+        async function changeExpectedHz() {
+            const hz = parseInt(expectedHzSelect.value);
+            try {
+                const response = await fetch(`${SERVER_URL}/set_expected_hz`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ hz: hz })
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    statusEl.textContent = `Data rate: ${hz} Hz | Reset trail to apply`;
+                    console.log(`Expected Hz changed to: ${hz}`);
+                } else {
+                    console.error('Failed to change expected Hz:', result.error);
+                    statusEl.textContent = `Error: ${result.error}`;
+                }
+            } catch (error) {
+                console.error('Error changing expected Hz:', error);
+                statusEl.textContent = `Connection Error`;
+            }
+        }
+
+        // Load current expected Hz on page load
+        async function loadExpectedHz() {
+            try {
+                const response = await fetch(`${SERVER_URL}/get_expected_hz`);
+                const data = await response.json();
+                if (data.expected_hz) {
+                    expectedHzSelect.value = data.expected_hz.toString();
+                }
+            } catch (error) {
+                console.error('Error loading expected Hz:', error);
+            }
+        }
+
         // Event Listeners
         resetButton.addEventListener('click', resetTrail);
+        expectedHzSelect.addEventListener('change', changeExpectedHz);
         canvas.addEventListener('mousedown', (e) => {
             view.isDragging = true;
             view.dragStartX = e.clientX - view.offsetX;
@@ -325,6 +408,7 @@
 
         // Initial setup
         resizeCanvas();
+        loadExpectedHz(); // Load current expected Hz
         setInterval(fetchData, 100); // Fetch data 10 times per second
         requestAnimationFrame(draw);
     </script>
