@@ -3,808 +3,330 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BRAMPS - Movement Trail Tracker</title>
+    <title>BRAMPS - Advanced Trail Tracker</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --background: hsl(0 0% 3.9%);
+            --foreground: hsl(0 0% 98%);
+            --card: hsl(0 0% 3.9%);
+            --card-foreground: hsl(0 0% 98%);
+            --popover: hsl(0 0% 3.9%);
+            --popover-foreground: hsl(0 0% 98%);
+            --primary: hsl(0 0% 98%);
+            --primary-foreground: hsl(0 0% 9.0%);
+            --secondary: hsl(0 0% 14.9%);
+            --secondary-foreground: hsl(0 0% 98%);
+            --muted: hsl(0 0% 14.9%);
+            --muted-foreground: hsl(0 0% 63.9%);
+            --accent: hsl(0 0% 14.9%);
+            --accent-foreground: hsl(0 0% 98%);
+            --destructive: hsl(0 62.8% 30.6%);
+            --destructive-foreground: hsl(0 0% 98%);
+            --border: hsl(0 0% 14.9%);
+            --input: hsl(0 0% 14.9%);
+            --ring: hsl(0 0% 83.1%);
+            --radius: 0.5rem;
         }
-
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0a0a0a;
-            color: #eee;
-            overflow: hidden;
-        }
-
-        .container {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--background);
+            color: var(--foreground);
+            margin: 0;
             display: flex;
             height: 100vh;
-        }
-
-        .sidebar {
-            width: 320px;
-            background: #1a1a2e;
-            padding: 20px;
-            overflow-y: auto;
-            box-shadow: 2px 0 10px rgba(0, 0, 0, 0.5);
-        }
-
-        .main-view {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            position: relative;
-        }
-
-        .header {
-            background: #16213e;
-            padding: 15px 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
-        }
-
-        .header h1 {
-            font-size: 24px;
-            color: #00d9ff;
-        }
-
-        .trail-container {
-            flex: 1;
-            position: relative;
-            background: #0a0a0a;
             overflow: hidden;
         }
-
+        .sidebar {
+            width: 280px;
+            background-color: var(--background);
+            border-right: 1px solid var(--border);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .main-content {
+            flex: 1;
+            position: relative;
+        }
         #trailCanvas {
             position: absolute;
             top: 0;
             left: 0;
-            cursor: grab;
-        }
-
-        #trailCanvas:active {
-            cursor: grabbing;
-        }
-
-        .controls {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            background: rgba(26, 26, 46, 0.95);
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
-        }
-
-        .control-btn {
-            display: block;
             width: 100%;
-            padding: 10px;
-            margin-bottom: 10px;
-            background: #00d9ff;
-            color: #1a1a2e;
-            border: none;
-            border-radius: 6px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
+            height: 100%;
         }
-
-        .control-btn:hover {
-            background: #00b8d4;
-            transform: translateY(-2px);
+        .panel {
+            background-color: var(--secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
         }
-
-        .control-btn:last-child {
-            margin-bottom: 0;
-        }
-
-        .section {
-            margin-bottom: 25px;
-        }
-
-        .section-title {
+        .panel h2 {
             font-size: 16px;
             font-weight: 600;
-            color: #00d9ff;
-            margin-bottom: 12px;
-            padding-bottom: 8px;
-            border-bottom: 2px solid #16213e;
+            color: var(--foreground);
+            margin: 0 0 16px 0;
         }
-
-        .input-group {
-            margin-bottom: 15px;
-        }
-
-        .input-group label {
-            display: block;
-            margin-bottom: 6px;
-            font-size: 14px;
-            color: #aaa;
-        }
-
-        .input-group input {
+        button {
             width: 100%;
-            padding: 10px;
-            background: #16213e;
-            border: 1px solid #2d3561;
-            border-radius: 6px;
-            color: #eee;
-            font-size: 14px;
-        }
-
-        .input-group input:focus {
-            outline: none;
-            border-color: #00d9ff;
-        }
-
-        .button {
-            width: 100%;
-            padding: 12px;
+            background-color: var(--primary);
+            color: var(--primary-foreground);
             border: none;
-            border-radius: 8px;
-            font-size: 16px;
+            padding: 10px;
+            border-radius: var(--radius);
+            font-size: 14px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s ease;
-            margin-bottom: 10px;
+            transition: background-color 0.2s;
         }
-
-        .button.success {
-            background: linear-gradient(135deg, #2ed573, #26de81);
-            color: white;
+        button:hover {
+            background-color: hsl(0 0% 80%);
         }
-
-        .button.danger {
-            background: linear-gradient(135deg, #ff4757, #ee5a6f);
-            color: white;
-        }
-
-        .button.primary {
-            background: linear-gradient(135deg, #00d9ff, #00b8d4);
-            color: #1a1a2e;
-        }
-
-        .button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0, 217, 255, 0.3);
-        }
-
-        .button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .status-indicator {
-            display: flex;
-            align-items: center;
-            padding: 12px;
-            background: #16213e;
-            border-radius: 8px;
-            margin-bottom: 15px;
-        }
-
-        .status-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            margin-right: 10px;
-            animation: pulse 2s infinite;
-        }
-
-        .status-dot.idle { background: #747d8c; }
-        .status-dot.active { background: #2ed573; }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
         .stats-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-bottom: 15px;
+            gap: 16px;
         }
-
-        .stat-box {
-            background: #16213e;
-            padding: 12px;
-            border-radius: 8px;
-            text-align: center;
-        }
-
+        .stat-item { text-align: center; }
         .stat-value {
-            font-size: 24px;
+            font-size: 22px;
             font-weight: 700;
-            color: #00d9ff;
+            color: var(--foreground);
         }
-
         .stat-label {
-            font-size: 11px;
-            color: #aaa;
-            margin-top: 4px;
+            font-size: 12px;
+            color: var(--muted-foreground);
         }
-
-        .legend {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            background: rgba(26, 26, 46, 0.95);
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
-        }
-
-        .legend-item {
-            display: flex;
-            align-items: center;
-            margin-bottom: 8px;
-            font-size: 13px;
-        }
-
-        .legend-item:last-child {
-            margin-bottom: 0;
-        }
-
-        .legend-color {
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            margin-right: 10px;
-        }
-
-        .message {
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 15px;
-            display: none;
-        }
-
-        .message.success {
-            background: rgba(46, 213, 115, 0.2);
-            border: 1px solid #2ed573;
-            color: #2ed573;
-        }
-
-        .message.error {
-            background: rgba(255, 71, 87, 0.2);
-            border: 1px solid #ff4757;
-            color: #ff4757;
-        }
-
-        .info-panel {
-            background: #16213e;
-            padding: 12px;
-            border-radius: 8px;
-            font-size: 13px;
-            line-height: 1.6;
-            margin-bottom: 15px;
-        }
-
-        .info-panel strong {
-            color: #00d9ff;
+        .status {
+            text-align: center;
+            font-size: 12px;
+            color: var(--muted-foreground);
+            margin-top: auto;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="sidebar">
-            <div class="section">
-                <div class="section-title">🎯 Trail Tracker</div>
-                
-                <div class="message" id="message"></div>
-                
-                <div class="status-indicator">
-                    <div class="status-dot idle" id="navStatus"></div>
-                    <span id="navStatusText">Ready to Track</span>
+    <div class="sidebar">
+        <div class="panel">
+            <h2>Controls</h2>
+            <button id="resetButton">Reset Trail</button>
+        </div>
+        <div class="panel">
+            <h2>Dashboard</h2>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-value" id="stat-pos-x">--</div>
+                    <div class="stat-label">Position X (m)</div>
                 </div>
-
-                <div class="input-group">
-                    <label for="serverUrl">Server URL:</label>
-                    <input type="text" id="serverUrl" value="http://localhost:5000">
+                <div class="stat-item">
+                    <div class="stat-value" id="stat-pos-y">--</div>
+                    <div class="stat-label">Position Y (m)</div>
                 </div>
-
-                <button class="button success" id="startBtn" onclick="startTracking()">
-                    ▶️ Start Tracking
-                </button>
-                <button class="button danger" id="stopBtn" onclick="stopTracking()" style="display: none;">
-                    ⏹️ Stop Tracking
-                </button>
-                <button class="button primary" onclick="clearTrail()">
-                    🗑️ Clear Trail
-                </button>
-                <button class="button primary" onclick="centerView()">
-                    🎯 Center View
-                </button>
-            </div>
-
-            <div class="section">
-                <div class="section-title">📊 Statistics</div>
-                
-                <div class="stats-grid">
-                    <div class="stat-box">
-                        <div class="stat-value" id="posX">0.0</div>
-                        <div class="stat-label">Position X (m)</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-value" id="posY">0.0</div>
-                        <div class="stat-label">Position Y (m)</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-value" id="heading">0</div>
-                        <div class="stat-label">Heading (°)</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-value" id="velocity">0.0</div>
-                        <div class="stat-label">Velocity (m/s)</div>
-                    </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="stat-velocity">--</div>
+                    <div class="stat-label">Velocity (m/s)</div>
                 </div>
-
-                <div class="stat-box" style="margin-bottom: 15px;">
-                    <div class="stat-value" id="distance">0.0</div>
-                    <div class="stat-label">Total Distance (m)</div>
-                </div>
-
-                <div class="stat-box">
-                    <div class="stat-value" id="pointCount">0</div>
-                    <div class="stat-label">Trail Points</div>
-                </div>
-            </div>
-
-            <div class="section">
-                <div class="section-title">ℹ️ Instructions</div>
-                <div class="info-panel">
-                    <strong>1.</strong> Connect iPhone IMU app to server<br>
-                    <strong>2.</strong> Click "Start Tracking"<br>
-                    <strong>3.</strong> Walk around and watch your trail!<br>
-                    <br>
-                    <strong>Controls:</strong><br>
-                    • Drag to pan<br>
-                    • Scroll to zoom<br>
-                    • Blue dot = current position<br>
-                    • Red arrow = heading<br>
-                    • Cyan line = your path
-                </div>
-            </div>
-
-            <div class="section">
-                <div class="section-title">🎨 Display Settings</div>
-                
-                <div class="input-group">
-                    <label for="trailWidth">Trail Width:</label>
-                    <input type="range" id="trailWidth" min="1" max="10" value="3" 
-                           oninput="updateTrailWidth(this.value)">
-                    <span id="trailWidthValue">3</span>
-                </div>
-
-                <div class="input-group">
-                    <label for="scale">Scale (pixels per meter):</label>
-                    <input type="range" id="scale" min="10" max="100" value="50" 
-                           oninput="updateScale(this.value)">
-                    <span id="scaleValue">50</span>
+                <div class="stat-item">
+                    <div class="stat-value" id="stat-heading">--</div>
+                    <div class="stat-label">Heading (°)</div>
                 </div>
             </div>
         </div>
-
-        <div class="main-view">
-            <div class="header">
-                <h1>🧭 Movement Trail Tracker</h1>
-                <div style="display: flex; gap: 15px; align-items: center;">
-                    <div style="font-size: 14px;">
-                        <span style="color: #aaa;">Updates:</span>
-                        <span style="color: #00d9ff; font-weight: 600;" id="updateCount">0</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="trail-container">
-                <canvas id="trailCanvas"></canvas>
-                
-                <div class="controls">
-                    <button class="control-btn" onclick="zoomIn()">🔍 Zoom In</button>
-                    <button class="control-btn" onclick="zoomOut()">🔍 Zoom Out</button>
-                    <button class="control-btn" onclick="centerView()">🎯 Center</button>
-                    <button class="control-btn" onclick="toggleGrid()">📐 Toggle Grid</button>
-                </div>
-
-                <div class="legend">
-                    <div class="legend-item">
-                        <div class="legend-color" style="background: #00d9ff;"></div>
-                        <span>Current Position</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-color" style="background: #00d9ff; opacity: 0.6;"></div>
-                        <span>Movement Trail</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-color" style="background: #ff4757;"></div>
-                        <span>Heading Direction</span>
-                    </div>
-                </div>
-            </div>
+        <div class="panel" style="margin-top: auto;">
+             <div class="status" id="status">Connecting...</div>
         </div>
+    </div>
+    <div class="main-content">
+        <canvas id="trailCanvas"></canvas>
     </div>
 
     <script>
-        // Global state
-        let serverUrl = 'http://localhost:5000';
-        let trackingActive = false;
-        let currentSession = null;
-        let positionUpdateInterval = null;
-        let updateCount = 0;
+        const SERVER_URL = `http://${window.location.hostname}:5000`;
+        const canvas = document.getElementById('trailCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusEl = document.getElementById('status');
+        const resetButton = document.getElementById('resetButton');
+        
+        // Dashboard elements
+        const statPosX = document.getElementById('stat-pos-x');
+        const statPosY = document.getElementById('stat-pos-y');
+        const statVelocity = document.getElementById('stat-velocity');
+        const statHeading = document.getElementById('stat-heading');
 
-        // Canvas state
-        let canvas, ctx;
-        let viewScale = 50;  // pixels per meter
-        let offsetX = 0;
-        let offsetY = 0;
-        let isDragging = false;
-        let dragStartX = 0;
-        let dragStartY = 0;
-        let showGrid = true;
-        let trailWidth = 3;
-
-        // Trail data
-        let trailPoints = [];
-        let currentPosition = null;
-
-        // Initialize
-        window.onload = function() {
-            canvas = document.getElementById('trailCanvas');
-            ctx = canvas.getContext('2d');
-            
-            resizeCanvas();
-            window.addEventListener('resize', resizeCanvas);
-            
-            // Canvas mouse events
-            canvas.addEventListener('mousedown', handleMouseDown);
-            canvas.addEventListener('mousemove', handleMouseMove);
-            canvas.addEventListener('mouseup', handleMouseUp);
-            canvas.addEventListener('wheel', handleWheel);
-            
-            // Center view
-            centerView();
-            
-            // Start rendering loop
-            requestAnimationFrame(render);
+        let trailData = { path: [] };
+        let view = {
+            scale: 30, // pixels per meter
+            offsetX: 0,
+            offsetY: 0,
+            isDragging: false,
+            dragStartX: 0,
+            dragStartY: 0
         };
 
         function resizeCanvas() {
-            const container = canvas.parentElement;
-            canvas.width = container.clientWidth;
-            canvas.height = container.clientHeight;
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            view.offsetX = rect.width / 2;
+            view.offsetY = rect.height / 2;
         }
 
-        async function startTracking() {
+        async function fetchData() {
             try {
-                serverUrl = document.getElementById('serverUrl').value.trim();
+                const response = await fetch(`${SERVER_URL}/trail_data`);
+                if (!response.ok) throw new Error(`Server Error: ${response.status}`);
                 
-                const response = await fetch(`${serverUrl}/navigation/start`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        initial_x: 0,
-                        initial_y: 0,
-                        initial_heading: 0
-                    })
-                });
+                trailData = await response.json();
                 
-                const result = await response.json();
-                
-                if (result.success) {
-                    currentSession = result.session_id;
-                    trackingActive = true;
-                    trailPoints = [];
-                    updateCount = 0;
-                    
-                    document.getElementById('navStatus').className = 'status-dot active';
-                    document.getElementById('navStatusText').textContent = 'Tracking Active';
-                    document.getElementById('startBtn').style.display = 'none';
-                    document.getElementById('stopBtn').style.display = 'block';
-                    
-                    // Start position updates
-                    positionUpdateInterval = setInterval(updatePosition, 100); // 10 Hz
-                    
-                    showMessage('Tracking started - walk around!', 'success');
-                }
+                statusEl.textContent = `Connected | Points: ${trailData.path.length}`;
+                updateDashboard(trailData);
+
             } catch (error) {
-                console.error('Error starting tracking:', error);
-                showMessage(`Error: ${error.message}`, 'error');
+                statusEl.textContent = `Connection Error`;
+                console.error("Fetch error:", error);
             }
         }
-
-        async function stopTracking() {
-            if (!currentSession) return;
-            
-            try {
-                const response = await fetch(`${serverUrl}/navigation/stop`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({session_id: currentSession})
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    trackingActive = false;
-                    currentSession = null;
-                    
-                    document.getElementById('navStatus').className = 'status-dot idle';
-                    document.getElementById('navStatusText').textContent = 'Tracking Stopped';
-                    document.getElementById('startBtn').style.display = 'block';
-                    document.getElementById('stopBtn').style.display = 'none';
-                    
-                    // Stop position updates
-                    if (positionUpdateInterval) {
-                        clearInterval(positionUpdateInterval);
-                        positionUpdateInterval = null;
-                    }
-                    
-                    showMessage(`Tracking stopped - ${trailPoints.length} points recorded`, 'success');
-                }
-            } catch (error) {
-                console.error('Error stopping tracking:', error);
-            }
+        
+        function updateDashboard(data) {
+            statPosX.textContent = data.position.x.toFixed(2);
+            statPosY.textContent = data.position.y.toFixed(2);
+            statVelocity.textContent = data.velocity.toFixed(2);
+            statHeading.textContent = data.heading.toFixed(0);
         }
 
-        async function updatePosition() {
-            if (!trackingActive) return;
-            
-            try {
-                const response = await fetch(`${serverUrl}/navigation/position`);
-                const result = await response.json();
-                
-                if (result.success) {
-                    const pos = result.position;
-                    
-                    // Update stats display
-                    document.getElementById('posX').textContent = pos.position.x.toFixed(2);
-                    document.getElementById('posY').textContent = pos.position.y.toFixed(2);
-                    document.getElementById('heading').textContent = pos.heading_degrees.toFixed(0);
-                    document.getElementById('velocity').textContent = pos.velocity.magnitude.toFixed(2);
-                    document.getElementById('distance').textContent = pos.total_distance.toFixed(2);
-                    document.getElementById('updateCount').textContent = ++updateCount;
-                    
-                    // Store current position
-                    currentPosition = {
-                        x: pos.position.x,
-                        y: pos.position.y,
-                        heading: pos.heading,
-                        velocity: pos.velocity.magnitude
-                    };
-                    
-                    // Add to trail if position changed significantly
-                    if (trailPoints.length === 0 || 
-                        Math.abs(currentPosition.x - trailPoints[trailPoints.length - 1].x) > 0.01 ||
-                        Math.abs(currentPosition.y - trailPoints[trailPoints.length - 1].y) > 0.01) {
-                        
-                        trailPoints.push({...currentPosition});
-                        document.getElementById('pointCount').textContent = trailPoints.length;
-                    }
-                }
-            } catch (error) {
-                console.error('Error updating position:', error);
-            }
-        }
-
-        function render() {
-            // Clear canvas
-            ctx.fillStyle = '#0a0a0a';
+        function draw() {
+            ctx.fillStyle = 'var(--background)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
             ctx.save();
-            
-            // Apply transformations
-            ctx.translate(canvas.width / 2 + offsetX, canvas.height / 2 + offsetY);
-            ctx.scale(viewScale, -viewScale);  // Flip Y axis for standard coordinates
-            
-            // Draw grid
-            if (showGrid) {
-                drawGrid();
+            ctx.translate(view.offsetX, view.offsetY);
+            ctx.scale(view.scale, -view.scale);
+
+            drawGridWithLabels();
+
+            const path = trailData.path;
+            if (path && path.length > 1) {
+                ctx.beginPath();
+                ctx.strokeStyle = 'hsl(0 0% 98%)';
+                ctx.lineWidth = 2 / view.scale;
+                ctx.moveTo(path[0][0], path[0][1]);
+                for (let i = 1; i < path.length; i++) {
+                    ctx.lineTo(path[i][0], path[i][1]);
+                }
+                ctx.stroke();
+                
+                drawDot(path[0][0], path[0][1], 'hsl(142.1 76.2% 42.2%)'); // Start
+                drawDot(path[path.length - 1][0], path[path.length - 1][1], 'hsl(346.8 77.2% 49.8%)'); // Current
             }
-            
-            // Draw origin
-            drawOrigin();
-            
-            // Draw trail
-            if (trailPoints.length > 1) {
-                drawTrail();
-            }
-            
-            // Draw current position
-            if (currentPosition) {
-                drawCurrentPosition();
-            }
-            
+
             ctx.restore();
             
-            requestAnimationFrame(render);
+            drawCenterCrosshair();
+            requestAnimationFrame(draw);
         }
-
-        function drawGrid() {
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-            ctx.lineWidth = 1 / viewScale;
-            
-            const gridSize = 1;  // 1 meter
-            const range = 50;  // Show 50 meters in each direction
-            
-            for (let x = -range; x <= range; x += gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(x, -range);
-                ctx.lineTo(x, range);
-                ctx.stroke();
-            }
-            
-            for (let y = -range; y <= range; y += gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(-range, y);
-                ctx.lineTo(range, y);
-                ctx.stroke();
-            }
-        }
-
-        function drawOrigin() {
-            // Draw X axis (red)
-            ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
-            ctx.lineWidth = 2 / viewScale;
+        
+        function drawDot(x, y, color) {
             ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(2, 0);
-            ctx.stroke();
-            
-            // Draw Y axis (green)
-            ctx.strokeStyle = 'rgba(0, 255, 0, 0.5)';
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(0, 2);
-            ctx.stroke();
-            
-            // Draw origin point
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-            ctx.beginPath();
-            ctx.arc(0, 0, 0.1, 0, Math.PI * 2);
+            ctx.arc(x, y, 6 / view.scale, 0, Math.PI * 2);
+            ctx.fillStyle = color;
             ctx.fill();
         }
 
-        function drawTrail() {
-            ctx.strokeStyle = 'rgba(0, 217, 255, 0.6)';
-            ctx.lineWidth = trailWidth / viewScale;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
+        function drawGridWithLabels() {
+            const gridSize = 1; // 1 meter grid
+            ctx.lineWidth = 1 / view.scale;
+            ctx.font = `${10 / view.scale}px Arial`;
+            ctx.fillStyle = 'var(--muted-foreground)';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            const viewLeft = -view.offsetX / view.scale;
+            const viewRight = (canvas.width - view.offsetX) / view.scale;
+            const viewTop = view.offsetY / view.scale;
+            const viewBottom = (view.offsetY - canvas.height) / view.scale;
             
+            // Draw grid lines
             ctx.beginPath();
-            ctx.moveTo(trailPoints[0].x, trailPoints[0].y);
-            
-            for (let i = 1; i < trailPoints.length; i++) {
-                ctx.lineTo(trailPoints[i].x, trailPoints[i].y);
+            for (let x = Math.floor(viewLeft / gridSize) * gridSize; x <= viewRight; x += gridSize) {
+                ctx.moveTo(x, viewBottom);
+                ctx.lineTo(x, viewTop);
             }
-            
-            ctx.stroke();
-            
-            // Draw dots at each point
-            ctx.fillStyle = 'rgba(0, 217, 255, 0.4)';
-            for (let i = 0; i < trailPoints.length; i++) {
-                ctx.beginPath();
-                ctx.arc(trailPoints[i].x, trailPoints[i].y, 0.05, 0, Math.PI * 2);
-                ctx.fill();
+            for (let y = Math.floor(viewBottom / gridSize) * gridSize; y <= viewTop; y += gridSize) {
+                ctx.moveTo(viewLeft, y);
+                ctx.lineTo(viewRight, y);
             }
-        }
-
-        function drawCurrentPosition() {
-            const pos = currentPosition;
-            
-            // Draw position circle
-            ctx.fillStyle = '#00d9ff';
-            ctx.beginPath();
-            ctx.arc(pos.x, pos.y, 0.15, 0, Math.PI * 2);
-            ctx.fill();
-            
-            // Draw heading indicator
-            const headingLength = 0.5;
-            const headingX = pos.x + Math.sin(pos.heading) * headingLength;
-            const headingY = pos.y + Math.cos(pos.heading) * headingLength;
-            
-            ctx.strokeStyle = '#ff4757';
-            ctx.lineWidth = 3 / viewScale;
-            ctx.beginPath();
-            ctx.moveTo(pos.x, pos.y);
-            ctx.lineTo(headingX, headingY);
+            ctx.strokeStyle = 'var(--border)';
             ctx.stroke();
-            
-            // Draw outer ring
-            ctx.strokeStyle = '#00d9ff';
-            ctx.lineWidth = 2 / viewScale;
+
+            // Draw axis lines (thicker)
             ctx.beginPath();
-            ctx.arc(pos.x, pos.y, 0.2, 0, Math.PI * 2);
+            ctx.moveTo(viewLeft, 0);
+            ctx.lineTo(viewRight, 0);
+            ctx.moveTo(0, viewBottom);
+            ctx.lineTo(0, viewTop);
+            ctx.strokeStyle = 'var(--muted-foreground)';
+            ctx.lineWidth = 2 / view.scale;
             ctx.stroke();
-        }
 
-        function clearTrail() {
-            trailPoints = [];
-            currentPosition = null;
-            updateCount = 0;
-            document.getElementById('pointCount').textContent = '0';
-            document.getElementById('updateCount').textContent = '0';
-            showMessage('Trail cleared', 'success');
-        }
-
-        function centerView() {
-            offsetX = 0;
-            offsetY = 0;
-        }
-
-        function zoomIn() {
-            viewScale = Math.min(viewScale * 1.2, 200);
-            document.getElementById('scale').value = viewScale;
-            document.getElementById('scaleValue').textContent = Math.round(viewScale);
-        }
-
-        function zoomOut() {
-            viewScale = Math.max(viewScale * 0.8, 10);
-            document.getElementById('scale').value = viewScale;
-            document.getElementById('scaleValue').textContent = Math.round(viewScale);
-        }
-
-        function toggleGrid() {
-            showGrid = !showGrid;
-        }
-
-        function updateTrailWidth(value) {
-            trailWidth = parseFloat(value);
-            document.getElementById('trailWidthValue').textContent = value;
-        }
-
-        function updateScale(value) {
-            viewScale = parseFloat(value);
-            document.getElementById('scaleValue').textContent = value;
-        }
-
-        // Canvas interaction
-        function handleMouseDown(e) {
-            isDragging = true;
-            dragStartX = e.clientX - offsetX;
-            dragStartY = e.clientY - offsetY;
-        }
-
-        function handleMouseMove(e) {
-            if (isDragging) {
-                offsetX = e.clientX - dragStartX;
-                offsetY = e.clientY - dragStartY;
+            // Draw labels
+            for (let x = Math.floor(viewLeft / gridSize) * gridSize; x <= viewRight; x += gridSize) {
+                if (x !== 0) {
+                    ctx.fillText(x, x, 15 / view.scale);
+                }
+            }
+            for (let y = Math.floor(viewBottom / gridSize) * gridSize; y <= viewTop; y += gridSize) {
+                 if (y !== 0) {
+                    ctx.save();
+                    ctx.scale(1, -1);
+                    ctx.fillText(y, 15 / view.scale, -y);
+                    ctx.restore();
+                }
             }
         }
 
-        function handleMouseUp(e) {
-            isDragging = false;
+        function drawCenterCrosshair() {
+            ctx.strokeStyle = 'var(--muted-foreground)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2 - 10, canvas.height / 2);
+            ctx.lineTo(canvas.width / 2 + 10, canvas.height / 2);
+            ctx.moveTo(canvas.width / 2, canvas.height / 2 - 10);
+            ctx.lineTo(canvas.width / 2, canvas.height / 2 + 10);
+            ctx.stroke();
         }
 
-        function handleWheel(e) {
+        async function resetTrail() {
+            await fetch(`${SERVER_URL}/reset_trail`, { method: 'POST' });
+            fetchData();
+        }
+
+        // Event Listeners
+        resetButton.addEventListener('click', resetTrail);
+        canvas.addEventListener('mousedown', (e) => {
+            view.isDragging = true;
+            view.dragStartX = e.clientX - view.offsetX;
+            view.dragStartY = e.clientY - view.offsetY;
+        });
+        canvas.addEventListener('mousemove', (e) => {
+            if (view.isDragging) {
+                view.offsetX = e.clientX - view.dragStartX;
+                view.offsetY = e.clientY - view.dragStartY;
+            }
+        });
+        window.addEventListener('mouseup', () => view.isDragging = false);
+        canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
-            
-            const delta = e.deltaY > 0 ? 0.9 : 1.1;
-            const newScale = viewScale * delta;
-            
-            if (newScale >= 10 && newScale <= 200) {
-                viewScale = newScale;
-                document.getElementById('scale').value = viewScale;
-                document.getElementById('scaleValue').textContent = Math.round(viewScale);
-            }
-        }
+            const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+            view.scale *= zoomFactor;
+        });
+        
+        window.addEventListener('resize', resizeCanvas);
 
-        function showMessage(text, type) {
-            const msg = document.getElementById('message');
-            msg.textContent = text;
-            msg.className = `message ${type}`;
-            msg.style.display = 'block';
-            
-            setTimeout(() => {
-                msg.style.display = 'none';
-            }, 3000);
-        }
+        // Initial setup
+        resizeCanvas();
+        setInterval(fetchData, 100); // Fetch data 10 times per second
+        requestAnimationFrame(draw);
     </script>
 </body>
 </html>

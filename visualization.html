@@ -371,7 +371,7 @@
 
     <script>
         let canvas, ctx;
-        let serverUrl = 'http://localhost:5000';
+        let serverUrl = '{{ SERVER_URL }}';
         let connected = false;
         let mappingActive = false;
         let currentSession = null;
@@ -394,6 +394,8 @@
             canvas = document.getElementById('mapCanvas');
             ctx = canvas.getContext('2d');
             
+            document.getElementById('serverUrl').value = serverUrl;
+
             resizeCanvas();
             window.addEventListener('resize', resizeCanvas);
             

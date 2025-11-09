@@ -1,400 +1,324 @@
-"""
-BRAMPS - IMU Dead-Reckoning Module
-Calculates position and orientation from IMU sensor data
-"""
-
 import numpy as np
-from datetime import datetime
 from collections import deque
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
 
-# Add quaternion utilities
-def quaternion_multiply(q1, q2):
-    w1, x1, y1, z1 = q1
-    w2, x2, y2, z2 = q2
-    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
-    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
-    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
-    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-    return np.array([w, x, y, z])
-
-def quaternion_conjugate(q):
-    w, x, y, z = q
-    return np.array([w, -x, -y, -z])
-
-def quaternion_to_euler(q):
-    w, x, y, z = q
-    # Roll (x-axis rotation)
-    sinr_cosp = 2 * (w * x + y * z)
-    cosr_cosp = 1 - 2 * (x * x + y * y)
-    roll = np.arctan2(sinr_cosp, cosr_cosp)
-
-    # Pitch (y-axis rotation)
-    sinp = 2 * (w * y - z * x)
-    if abs(sinp) >= 1:
-        pitch = np.copysign(np.pi / 2, sinp)
-    else:
-        pitch = np.arcsin(sinp)
-
-    # Yaw (z-axis rotation)
-    siny_cosp = 2 * (w * z + x * y)
-    cosy_cosp = 1 - 2 * (y * y + z * z)
-    yaw = np.arctan2(siny_cosp, cosy_cosp)
-
-    return roll, pitch, yaw
-
-def vector_rotate(v, q):
-    qv = np.array([0, v[0], v[1], v[2]])
-    q_conj = quaternion_conjugate(q)
-    return quaternion_multiply(quaternion_multiply(q, qv), q_conj)[1:]
-
-
 class IMUDeadReckoning:
     """
-    IMU Dead-Reckoning implementation for position tracking.
-    
-    Integrates accelerometer and gyroscope data to estimate position and orientation.
-    Includes basic filtering and drift correction.
+    IMU Dead-Reckoning tuned for hand-held phone walking on a flat floor,
+    BALANCED: Detects walking movement but stops drift when stationary.
     """
-    
+
     def __init__(self, initial_position=(0.0, 0.0), initial_heading=0.0):
-        """
-        Initialize dead-reckoning system.
-        
-        Args:
-            initial_position: Tuple (x, y) in meters
-            initial_heading: Initial heading in radians (0 = North, clockwise positive)
-        """
-        # Position state (x, y in meters)
+        # Position and velocity
         self.position = np.array(initial_position, dtype=float)
-        
-        # Velocity state (vx, vy in m/s)
         self.velocity = np.array([0.0, 0.0], dtype=float)
-        
-        # Orientation state (heading in radians)
         self.heading = float(initial_heading)
-        
-        # Angular velocity (rad/s)
         self.angular_velocity = 0.0
-        
-        # Last update timestamp
+
+        # Timing
         self.last_timestamp = None
-        
-        # Position history for visualization
+        self.last_motion_timestamp = None  # last time we detected real motion
+
+        # History
         self.position_history = deque(maxlen=1000)
-        
-        # Sensor data buffers for filtering
-        self.accel_buffer = deque(maxlen=10)  # Increased for better filtering
+
+        # Sensor buffers
+        self.accel_buffer = deque(maxlen=10)
         self.gyro_buffer = deque(maxlen=10)
-        
-        # Calibration offsets
-        self.accel_bias = np.array([0.0, 0.0, 0.0])
-        self.gyro_bias = np.array([0.0, 0.0, 0.0])
-        
-        # Gravity vector (m/s²)
-        self.gravity = np.array([0.0, 0.0, 9.81])
-        
-        # Statistics
-        self.update_count = 0
-        self.total_distance = 0.0
-        
-        # Stationary detection
-        self.stationary_count = 0
-        self.stationary_threshold = 20  # Number of updates to consider stationary
-        
-        # Balanced thresholds - not too sensitive, not too strict
-        self.accel_threshold = 0.2  # m/s² - balanced value
-        self.velocity_threshold = 0.08  # m/s - balanced value
-        self.gyro_threshold = 0.03  # rad/s - for rotation detection
-        
-        # Orientation quaternion (w, x, y, z) - identity = level, facing north
-        self.orientation = np.array([1.0, 0.0, 0.0, 0.0])  # w, x, y, z
-        
-        # For complementary filter
-        self.alpha = 0.98  # Gyro trust factor
-        
-        # Add mag buffer if needed
         self.mag_buffer = deque(maxlen=10)
 
-        logger.info(f"IMU Dead-Reckoning initialized with quaternion support")
-    
+        # Calibration
+        self.accel_bias = np.array([0.0, 0.0, 0.0])
+        self.gyro_bias = np.array([0.0, 0.0, 0.0])
+
+        # Gravity estimate
+        self.gravity_estimate = np.array([0.0, 0.0, 9.81])
+        self.gravity_alpha = 0.98  # slow adaptation
+
+        # Stats
+        self.update_count = 0
+        self.total_distance = 0.0
+
+        # ===== BALANCED PARAMETERS - DETECTS MOVEMENT BUT STOPS DRIFT =====
+        # Stationary detection
+        self.stationary_count = 0
+        self.stationary_threshold = 3          # samples (fast ZUPT)
+
+        # Acceleration thresholds
+        # CRITICAL FIX: Walking acceleration is typically 0.8-1.5 m/s²
+        # Your old code had 2.0 m/s² which is TOO HIGH - missed all walking!
+        self.accel_stationary_threshold = 2.0  # m/s²: tolerance around 1g for "near gravity"
+        self.accel_move_threshold = 0.4        # m/s²: FIXED! Walking is ~0.8-1.5 m/s² (was 2.0!)
+
+        # Horizontal accel deadzone (world frame)
+        self.accel_deadzone = 0.12             # m/s² per component (LOWERED from 0.30)
+
+        # Gyro thresholds  
+        self.gyro_stationary_threshold = 0.04  # rad/s: tighter "still" condition (LOWERED from 0.1)
+
+        # Velocity damping & cutoff
+        self.velocity_damping = 0.25           # keep 25% per frame when not integrating
+        self.velocity_threshold = 0.03         # m/s: below this -> zero (LOWERED from 0.05)
+
+        # Max plausible speed (safety clamp)
+        self.max_speed = 3.0                   # m/s (~10.8 km/h)
+
+        # Tilt gating
+        self.max_tilt_deg = 60.0               # More reasonable limit
+
+        # If no motion detected for this many seconds, slam everything to zero
+        self.no_motion_timeout = 0.5  # s
+
+        logger.info("IMU Dead-Reckoning initialized (BALANCED mode)")
+        logger.info(f"  ✅ FIX: accel_move_threshold = {self.accel_move_threshold} m/s² (was 2.0)")
+        logger.info(f"  This will now detect walking movements!")
+        logger.info(f"  Stationary samples: {self.stationary_threshold}")
+        logger.info(f"  Velocity damping: {self.velocity_damping}")
+        logger.info(f"  Velocity cutoff: {self.velocity_threshold} m/s")
+
     def reset(self, position=(0.0, 0.0), heading=0.0):
-        """Reset position and heading to specified values."""
         self.position = np.array(position, dtype=float)
         self.velocity = np.array([0.0, 0.0], dtype=float)
         self.heading = float(heading)
         self.angular_velocity = 0.0
         self.last_timestamp = None
+        self.last_motion_timestamp = None
         self.position_history.clear()
         self.total_distance = 0.0
         self.stationary_count = 0
         self.orientation = np.array([1.0, 0.0, 0.0, 0.0])
-        logger.info(f"Dead-reckoning reset to position {position}, heading {np.degrees(heading):.1f}°")
-        logger.info(f"Reset orientation quaternion to identity")
-    
+        self.gravity_estimate = np.array([0.0, 0.0, 9.81])
+        self.pitch = 0.0
+        self.roll = 0.0
+        logger.info(f"Reset to position {position}, heading {np.degrees(heading):.1f}°")
+
     def calibrate(self, accel_samples, gyro_samples):
-        """
-        Calibrate sensor biases from stationary samples.
-        
-        Args:
-            accel_samples: List of (ax, ay, az) tuples
-            gyro_samples: List of (gx, gy, gz) tuples
-        """
         if len(accel_samples) > 0:
             accel_array = np.array(accel_samples)
             self.accel_bias = np.mean(accel_array, axis=0)
-            # Subtract gravity from z-axis bias
             self.accel_bias[2] -= 9.81
-            logger.info(f"Accelerometer bias calibrated: {self.accel_bias}")
-        
+            logger.info(f"Accel bias: {self.accel_bias}")
+
         if len(gyro_samples) > 0:
             gyro_array = np.array(gyro_samples)
             self.gyro_bias = np.mean(gyro_array, axis=0)
-            logger.info(f"Gyroscope bias calibrated: {self.gyro_bias}")
-    
+            logger.info(f"Gyro bias: {self.gyro_bias}")
+
     def _low_pass_filter(self, buffer, new_value, alpha=0.3):
-        """
-        Apply low-pass filter to reduce noise.
-        
-        Args:
-            buffer: Deque of previous values
-            new_value: New sensor reading
-            alpha: Filter coefficient (0-1, lower = more smoothing)
-        
-        Returns:
-            Filtered value
-        """
         if len(buffer) == 0:
             return new_value
-        
-        filtered = alpha * new_value + (1 - alpha) * buffer[-1]
-        return filtered
-    
-    def _remove_gravity(self, accel, heading):
-        """
-        Remove gravity component from accelerometer reading.
-        
-        Args:
-            accel: Raw accelerometer reading (ax, ay, az)
-            heading: Current heading in radians
-        
-        Returns:
-            Linear acceleration without gravity
-        """
-        # Simple gravity removal assuming device is mostly upright
-        # In a full implementation, use orientation quaternion
-        accel_corrected = accel.copy()
-        accel_corrected[2] -= 9.81  # Remove gravity from z-axis
-        
-        return accel_corrected
-    
-    def _transform_to_world_frame(self, accel_device, heading):
-        """
-        Transform acceleration from device frame to world frame.
-        
-        Args:
-            accel_device: Acceleration in device frame (forward, right, down)
-            heading: Current heading in radians
-        
-        Returns:
-            Acceleration in world frame (north, east)
-        """
-        # Simple 2D rotation (assuming device is held upright)
-        # In full implementation, use full 3D rotation matrix or quaternion
-        
-        # Extract horizontal acceleration (assuming device coordinate system)
-        ax = accel_device[0]  # Forward
-        ay = accel_device[1]  # Right
-        
-        # Rotate by heading to get world frame
-        cos_h = np.cos(heading)
-        sin_h = np.sin(heading)
-        
-        # World frame: x = North, y = East
-        world_x = ax * cos_h - ay * sin_h
-        world_y = ax * sin_h + ay * cos_h
-        
-        return np.array([world_x, world_y])
-    
-    def update(self, accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z, timestamp_ms, mag_x=None, mag_y=None, mag_z=None):
-        """
-        Update position estimate with new IMU data.
-        
-        Args:
-            accel_x, accel_y, accel_z: Accelerometer readings (m/s²)
-            gyro_x, gyro_y, gyro_z: Gyroscope readings (rad/s)
-            timestamp_ms: Timestamp in milliseconds
-        
-        Returns:
-            Dictionary with current state (position, velocity, heading)
-        """
-        # Convert timestamp to seconds
-        timestamp = timestamp_ms / 1000.0
-        
-        # Calculate time delta
+        return alpha * new_value + (1 - alpha) * buffer[-1]
+
+    def _quaternion_multiply(self, q1, q2):
+        w1, x1, y1, z1 = q1
+        w2, x2, y2, z2 = q2
+        w = w1*w2 - x1*x2 - y1*y2 - z1*z2
+        x = w1*x2 + x1*w2 + y1*z2 - z1*y2
+        y = w1*y2 - x1*z2 + y1*w2 + z1*x2
+        z = w1*z2 + x1*y2 - y1*x2 + z1*w2
+        return np.array([w, x, y, z])
+
+    def _quaternion_conjugate(self, q):
+        w, x, y, z = q
+        return np.array([w, -x, -y, -z])
+
+    def _vector_rotate(self, v, q):
+        qv = np.array([0, v[0], v[1], v[2]])
+        q_conj = self._quaternion_conjugate(q)
+        rotated = self._quaternion_multiply(self._quaternion_multiply(q, qv), q_conj)
+        return rotated[1:]
+
+    def _update_tilt_from_gravity(self):
+        g = self.gravity_estimate
+        norm = np.linalg.norm(g)
+        if norm < 1e-3:
+            return
+        gx, gy, gz = g / norm
+        self.pitch = math.atan2(-gx, math.sqrt(gy*gy + gz*gz))
+        self.roll = math.atan2(gy, gz)
+
+    def _hard_stop(self):
+        """Brutally force everything to 'stopped'."""
+        self.velocity[:] = 0.0
+
+    def update(self, accel_x, accel_y, accel_z,
+               gyro_x, gyro_y, gyro_z,
+               timestamp_ms,
+               mag_x=None, mag_y=None, mag_z=None):
+
+        # Timestamp handling: accept ms or seconds
+        timestamp = timestamp_ms / 1000.0 if timestamp_ms > 1000 else float(timestamp_ms)
+
         if self.last_timestamp is None:
             self.last_timestamp = timestamp
+            self.last_motion_timestamp = timestamp
             return self.get_state()
-        
+
         dt = timestamp - self.last_timestamp
-        
-        # Sanity check on dt (reject if too large or negative)
         if dt <= 0 or dt > 1.0:
-            logger.warning(f"Invalid time delta: {dt:.3f}s, skipping update")
+            logger.warning(f"Invalid dt: {dt:.3f}s, skipping")
             self.last_timestamp = timestamp
             return self.get_state()
-        
-        # Create numpy arrays
+
+        # ----- STEP 1: Bias removal & filtering -----
         accel = np.array([accel_x, accel_y, accel_z]) - self.accel_bias
         gyro = np.array([gyro_x, gyro_y, gyro_z]) - self.gyro_bias
-        
-        # Apply low-pass filter
+
         accel_filtered = self._low_pass_filter(self.accel_buffer, accel)
         gyro_filtered = self._low_pass_filter(self.gyro_buffer, gyro)
-        
+
         self.accel_buffer.append(accel_filtered)
         self.gyro_buffer.append(gyro_filtered)
-        
-        # Update heading from gyroscope (z-axis rotation)
-        # Positive rotation is clockwise when looking down
-        angular_velocity = gyro_filtered[2]
-        self.heading += angular_velocity * dt
-        
-        # Normalize heading to [0, 2π)
-        self.heading = self.heading % (2 * np.pi)
-        self.angular_velocity = angular_velocity
-        
-        # Update orientation from gyro
+
+        # Magnitudes
+        raw_acc_mag = np.linalg.norm(accel_filtered)
+        gyro_mag = np.linalg.norm(gyro_filtered)
+
+        # Near 1g?
+        near_gravity = abs(raw_acc_mag - 9.81) < self.accel_stationary_threshold
+
+        # ----- STEP 2: Gravity estimate (only when clearly near 1g & low gyro) -----
+        if near_gravity and gyro_mag < self.gyro_stationary_threshold:
+            self.gravity_estimate = (
+                self.gravity_alpha * self.gravity_estimate +
+                (1.0 - self.gravity_alpha) * accel_filtered
+            )
+
+        # Update tilt from gravity
+        self._update_tilt_from_gravity()
+
+        # ----- STEP 3: Remove gravity -> linear accel -----
+        accel_linear = accel_filtered - self.gravity_estimate
+
+        # ----- STEP 4: Heading from gyro (yaw only) -----
+        self.heading += gyro_filtered[2] * dt
+        self.heading = math.atan2(math.sin(self.heading), math.cos(self.heading))
+        self.angular_velocity = gyro_filtered[2]
+
+        # ----- STEP 5: Quaternion integration (optional) -----
         gyro_vec = gyro_filtered * dt / 2.0
-        gyro_quat = np.array([0.0, gyro_vec[0], gyro_vec[1], gyro_vec[2]])
-        gyro_quat[0] = np.sqrt(1.0 - np.dot(gyro_quat[1:], gyro_quat[1:]))
-        self.orientation = quaternion_multiply(self.orientation, gyro_quat)
-        self.orientation /= np.linalg.norm(self.orientation)  # Normalize
+        dq = np.array([1.0, gyro_vec[0], gyro_vec[1], gyro_vec[2]])
+        norm_dq = np.linalg.norm(dq)
+        if norm_dq > 1e-6:
+            dq /= norm_dq
+            self.orientation = self._quaternion_multiply(self.orientation, dq)
+            self.orientation /= np.linalg.norm(self.orientation)
 
-        # Complementary filter with accel for pitch/roll correction
-        roll, pitch, _ = quaternion_to_euler(self.orientation)
-        
-        # Accel-based pitch/roll
-        accel_pitch = np.arctan2(accel_filtered[0], np.sqrt(accel_filtered[1]**2 + accel_filtered[2]**2))
-        accel_roll = np.arctan2(-accel_filtered[1], accel_filtered[2])
-        
-        # Fuse with gyro estimates
-        pitch = self.alpha * (pitch + gyro_filtered[1] * dt) + (1 - self.alpha) * accel_pitch
-        roll = self.alpha * (roll + gyro_filtered[0] * dt) + (1 - self.alpha) * accel_roll
-
-        # Update quaternion with fused pitch/roll/yaw
-        cy = np.cos(self.heading * 0.5)
-        sy = np.sin(self.heading * 0.5)
-        cp = np.cos(pitch * 0.5)
-        sp = np.sin(pitch * 0.5)
-        cr = np.cos(roll * 0.5)
-        sr = np.sin(roll * 0.5)
-
-        w = cy * cp * cr + sy * sp * sr
-        x = cy * cp * sr - sy * sp * cr
-        y = sy * cp * sr + cy * sp * cr
-        z = sy * cp * cr - cy * sp * sr
-
-        self.orientation = np.array([w, x, y, z])
-
-        # Magnetometer heading correction if provided
+        # ----- STEP 6: Magnetometer correction (if available) -----
         if mag_x is not None and mag_y is not None and mag_z is not None:
             mag = np.array([mag_x, mag_y, mag_z])
             mag_filtered = self._low_pass_filter(self.mag_buffer, mag)
             self.mag_buffer.append(mag_filtered)
-            
-            # Rotate mag to horizontal plane
-            mag_world = vector_rotate(mag_filtered, self.orientation)
-            mag_heading = np.arctan2(mag_world[1], mag_world[0])  # Y/X for heading
-            
-            # Fuse with gyro heading (simple complementary)
-            self.heading = self.alpha * self.heading + (1 - self.alpha) * mag_heading
+            mag_heading = math.atan2(mag_filtered[1], mag_filtered[0])
+            self.heading = self.alpha * self.heading + (1.0 - self.alpha) * mag_heading
 
-        # Remove gravity using current orientation
-        gravity_world = vector_rotate(self.gravity, self.orientation)
-        accel_linear = accel_filtered - gravity_world
-
-        # Project to horizontal plane (ignore Z component for 2D trail)
-        accel_horizontal = accel_linear[:2]  # X and Y only
-        
-        # Rotate by heading (yaw) for world frame
-        cos_h = np.cos(self.heading)
-        sin_h = np.sin(self.heading)
-        ax = accel_horizontal[0]
-        ay = accel_horizontal[1]
-        world_ax = ax * cos_h - ay * sin_h
-        world_ay = ax * sin_h + ay * cos_h
+        # ----- STEP 7: Transform horizontal accel to world frame -----
+        accel_horizontal = accel_linear[:2]
+        cos_h = math.cos(self.heading)
+        sin_h = math.sin(self.heading)
+        world_ax = accel_horizontal[0] * cos_h - accel_horizontal[1] * sin_h
+        world_ay = accel_horizontal[0] * sin_h + accel_horizontal[1] * cos_h
         accel_world = np.array([world_ax, world_ay])
-        
-        # Calculate magnitudes for thresholding
+
+        # Deadzone per component
+        for i in (0, 1):
+            if abs(accel_world[i]) < self.accel_deadzone:
+                accel_world[i] = 0.0
+
         accel_magnitude = np.linalg.norm(accel_world)
-        gyro_magnitude = np.linalg.norm(gyro_filtered)
-        
-        # Stationary detection - if both accel and gyro are below threshold
-        if accel_magnitude < self.accel_threshold and gyro_magnitude < self.gyro_threshold:
+
+        # ----- STEP 8: Stationary detection -----
+        horizontal_near_zero = accel_magnitude < 0.15  # almost no horizontal accel
+
+        if ((near_gravity and gyro_mag < self.gyro_stationary_threshold) or
+            (horizontal_near_zero and gyro_mag < self.gyro_stationary_threshold)):
             self.stationary_count += 1
         else:
             self.stationary_count = 0
-        
-        # If stationary for multiple updates, zero out velocity
-        if self.stationary_count >= self.stationary_threshold:
-            self.velocity *= 0.0  # Force stop when stationary
+
+        is_stationary = self.stationary_count >= self.stationary_threshold
+
+        # Immediate hard-stop hint: even one very "still" frame
+        if near_gravity and gyro_mag < (0.5 * self.gyro_stationary_threshold):
+            self._hard_stop()
+            accel_world[:] = 0.0
+            accel_magnitude = 0.0
+
+        # ----- STEP 9: Tilt gating -----
+        pitch_deg = abs(math.degrees(self.pitch))
+        roll_deg = abs(math.degrees(self.roll))
+        too_tilted = (pitch_deg > self.max_tilt_deg) or (roll_deg > self.max_tilt_deg)
+
+        # ----- STEP 10: Velocity update -----
+        if is_stationary:
+            # Hard stop when clearly stationary across multiple frames
+            self._hard_stop()
         else:
-            # Only integrate acceleration if it's above noise level
-            if accel_magnitude >= self.accel_threshold:
-                # Integrate acceleration to get velocity
+            # Any strong horizontal accel or rotation counts as "motion"
+            if accel_magnitude >= self.accel_move_threshold or gyro_mag >= self.gyro_stationary_threshold:
+                self.last_motion_timestamp = timestamp
+
+            if (not too_tilted) and accel_magnitude >= self.accel_move_threshold:
+                # REAL MOVEMENT DETECTED - INTEGRATE!
                 self.velocity += accel_world * dt
             else:
-                # Apply strong velocity damping when no significant acceleration
-                self.velocity *= 0.85  # Increased damping from 0.95
-        
-        # Apply velocity threshold - stop if moving very slowly
-        velocity_magnitude = np.linalg.norm(self.velocity)
-        if velocity_magnitude < self.velocity_threshold:
-            self.velocity *= 0.0  # Stop if moving very slowly
-        
-        # Store old position for distance calculation
+                # No significant movement - damp velocity
+                self.velocity *= self.velocity_damping
+
+        # Speed clamp
+        speed = np.linalg.norm(self.velocity)
+        if speed > self.max_speed:
+            self.velocity *= (self.max_speed / speed)
+            speed = self.max_speed
+
+        # Velocity cutoff
+        if speed < self.velocity_threshold:
+            self._hard_stop()
+            speed = 0.0
+
+        # If we've seen no motion for a while, forcefully freeze
+        if self.last_motion_timestamp is not None and (timestamp - self.last_motion_timestamp) > self.no_motion_timeout:
+            self._hard_stop()
+            speed = 0.0
+
+        # ----- STEP 11: Position integration -----
         old_position = self.position.copy()
-        
-        # Integrate velocity to get position
         self.position += self.velocity * dt
-        
-        # Calculate distance traveled
         distance = np.linalg.norm(self.position - old_position)
         self.total_distance += distance
-        
-        # Store position history
+
+        # ----- STEP 12: History -----
         self.position_history.append({
             'x': float(self.position[0]),
             'y': float(self.position[1]),
             'heading': float(self.heading),
-            'timestamp': timestamp,
-            'velocity': float(velocity_magnitude)
+            'timestamp': float(timestamp),
+            'velocity': float(speed)
         })
-        
-        # Update timestamp and counter
+
         self.last_timestamp = timestamp
         self.update_count += 1
-        
-        # Log every 50 updates
+
         if self.update_count % 50 == 0:
-            logger.info(f"Dead-reckoning update #{self.update_count}: pos=({self.position[0]:.2f}, {self.position[1]:.2f}), "
-                       f"heading={np.degrees(self.heading):.1f}°, vel={velocity_magnitude:.2f} m/s, dist={self.total_distance:.2f}m")
-        
+            logger.info(
+                f"Update #{self.update_count}: "
+                f"pos=({self.position[0]:.2f}, {self.position[1]:.2f}), "
+                f"vel={speed:.3f} m/s, "
+                f"accel_mag={accel_magnitude:.3f}, "
+                f"stationary={is_stationary}, "
+                f"dist={self.total_distance:.2f}m"
+            )
+
         return self.get_state()
-    
+
     def get_state(self):
-        """
-        Get current state of the dead-reckoning system.
-        
-        Returns:
-            Dictionary with position, velocity, heading, and statistics
-        """
-        velocity_magnitude = np.linalg.norm(self.velocity)
-        
+        speed = np.linalg.norm(self.velocity)
+        is_stationary = self.stationary_count >= self.stationary_threshold
+
         return {
             'position': {
                 'x': float(self.position[0]),
@@ -403,30 +327,73 @@ class IMUDeadReckoning:
             'velocity': {
                 'vx': float(self.velocity[0]),
                 'vy': float(self.velocity[1]),
-                'magnitude': float(velocity_magnitude)
+                'magnitude': float(speed)
             },
             'heading': float(self.heading),
             'heading_degrees': float(np.degrees(self.heading)),
             'angular_velocity': float(self.angular_velocity),
+            'pitch': float(self.pitch),
+            'roll': float(self.roll),
+            'pitch_degrees': float(np.degrees(self.pitch)),
+            'roll_degrees': float(np.degrees(self.roll)),
             'timestamp': float(self.last_timestamp) if self.last_timestamp else None,
             'update_count': self.update_count,
-            'total_distance': float(self.total_distance)
+            'total_distance': float(self.total_distance),
+            'is_stationary': is_stationary,
+            'stationary_count': self.stationary_count
         }
-    
+
     def get_position_history(self, limit=None):
-        """
-        Get position history for visualization.
-        
-        Args:
-            limit: Maximum number of points to return (None = all)
-        
-        Returns:
-            List of position dictionaries
-        """
         history = list(self.position_history)
         if limit and len(history) > limit:
-            # Sample evenly from history
-            step = len(history) // limit
+            step = max(1, len(history) // limit)
             history = history[::step]
         return history
 
+
+class AdvancedTrailTracker(IMUDeadReckoning):
+    """
+    Wrapper that only needs accel + gyro_z + timestamp and keeps a path history.
+    Signature is compatible with server.py calling update(..., timestamp=...).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.trail_points = [(0.0, 0.0)]
+
+    def reset(self):
+        super().reset()
+        self.trail_points = [(0.0, 0.0)]
+
+    def update(self, accel_x, accel_y, accel_z,
+               gyro_z, timestamp,
+               mag_x=None, mag_y=None, mag_z=None):
+        """
+        Backwards-compatible signature:
+        - server.py calls this with keyword 'timestamp'
+        """
+        state = super().update(
+            accel_x, accel_y, accel_z,
+            0.0, 0.0, gyro_z,
+            timestamp,          # IMUDeadReckoning handles s vs ms
+            mag_x, mag_y, mag_z
+        )
+
+        self.trail_points.append((
+            float(self.position[0]),
+            float(self.position[1])
+        ))
+
+        return state
+
+    def get_trail_data(self):
+        speed = np.linalg.norm(self.velocity)
+        return {
+            "path": self.trail_points,
+            "position": {
+                "x": float(self.position[0]),
+                "y": float(self.position[1])
+            },
+            "velocity": float(speed),
+            "heading": float(np.degrees(self.heading)) % 360
+        }

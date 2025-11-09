@@ -170,7 +170,7 @@
         <div class="info-box">
             <p><strong>iPhone IMU Data Display</strong></p>
             <p>This page displays real-time sensor data from your iPhone IMU Utility App.</p>
-            <p>Configure your iPhone app: Host: <strong>10.75.173.146</strong>, UDP Port: <strong>65000</strong>, Format: <strong>JSON</strong></p>
+            <p>Configure your iPhone app: Host: <strong>192.168.1.45</strong>, UDP Port: <strong>8888</strong>, Format: <strong>JSON</strong></p>
         </div>
 
         <div id="errorContainer"></div>
@@ -188,8 +188,8 @@
             
             <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; padding: 15px; margin-top: 15px;">
                 <strong>📱 iPhone App Settings:</strong><br>
-                • Host/IP: <code>10.75.173.146</code><br>
-                • UDP Port: <code>65000</code><br>
+                • Host/IP: <code>192.168.1.45</code><br>
+                • UDP Port: <code>8888</code><br>
                 • Data Format: <code>JSON</code><br>
                 • Rate: <code>10 Hz</code> (recommended)
             </div>
@@ -268,7 +268,7 @@
 
     <script>
         // Hardcoded server URL - automatically connects to your server
-        const SERVER_URL = 'http://10.75.173.146:5000';
+        const SERVER_URL = 'http://192.168.1.45:5000';
         let iphoneDataInterval = null;
         
         function showError(message) {
